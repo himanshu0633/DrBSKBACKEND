@@ -6,11 +6,256 @@ const Product = require('../models/product');
 const { logger } = require("../utils/logger");
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+
 // Initialize Razorpay instance
 const razorpayInstance = new Razorpay({
-    key_id:"rzp_test_RpQ1JwSJEy6yAw",
-    key_secret: "1XsoSE1HMxnMUbIoC3V3An6n",
+    key_id: process.env.RAZORPAY_KEY_ID || "rzp_live_hgk55iUzVRpKZ1",
+    key_secret: process.env.RAZORPAY_KEY_SECRET || "SKybR16tyVoO3iDgXfAMs6fA",
 });
+
+// Email transporter setup
+const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: process.env.SMTP_PORT || 587,
+    secure: false,
+    auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
+    },
+    tls: {
+        rejectUnauthorized: false
+    }
+});
+
+// Email template function
+const generateOrderEmailTemplate = (order, user) => {
+    const itemsHtml = order.items.map(item => `
+        <tr>
+            <td style="padding: 10px; border: 1px solid #ddd;">
+                <div style="display: flex; align-items: center;">
+                    ${item.media && item.media.length > 0 ? 
+                        `<img src="${item.media[0].url}" alt="${item.name}" style="width: 60px; height: 60px; object-fit: cover; margin-right: 10px; border-radius: 5px;">` 
+                        : ''}
+                    <div>
+                        <strong>${item.name}</strong>
+                        ${item.category ? `<br><small>Category: ${item.category}</small>` : ''}
+                    </div>
+                </div>
+            </td>
+            <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${item.quantity}</td>
+            <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">₹${item.price.toFixed(2)}</td>
+            <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">₹${(item.price * item.quantity).toFixed(2)}</td>
+        </tr>
+    `).join('');
+
+    return `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Order Confirmation - ${order._id}</title>
+            <style>
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 20px; background-color: #f7f9fc; }
+                .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+                .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px 20px; text-align: center; }
+                .header h1 { margin: 0; font-size: 28px; }
+                .header p { margin: 10px 0 0; opacity: 0.9; }
+                .content { padding: 30px; }
+                .section { margin-bottom: 25px; }
+                .section-title { color: #667eea; border-bottom: 2px solid #667eea; padding-bottom: 8px; margin-bottom: 15px; font-size: 18px; font-weight: 600; }
+                .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
+                .info-item { background: #f8f9fa; padding: 12px 15px; border-radius: 6px; border-left: 4px solid #667eea; }
+                .info-label { font-weight: 600; color: #555; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+                .info-value { color: #222; font-size: 15px; margin-top: 5px; }
+                .order-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+                .order-table th { background: #667eea; color: white; padding: 12px; text-align: left; }
+                .order-table td { padding: 12px; border-bottom: 1px solid #eee; }
+                .order-table tr:hover { background: #f9f9f9; }
+                .total-row { background: #f0f7ff; font-weight: bold; }
+                .status-badge { display: inline-block; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+                .status-pending { background: #fff3cd; color: #856404; }
+                .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 14px; border-top: 1px solid #eee; }
+                .footer a { color: #667eea; text-decoration: none; }
+                .footer a:hover { text-decoration: underline; }
+                .order-id { font-family: monospace; background: #f1f3f4; padding: 4px 8px; border-radius: 4px; font-size: 14px; }
+                .highlight { background: linear-gradient(120deg, #a1c4fd 0%, #c2e9fb 100%); padding: 10px 15px; border-radius: 6px; margin: 15px 0; border-left: 4px solid #4dabf7; }
+                @media (max-width: 600px) {
+                    .content { padding: 20px; }
+                    .info-grid { grid-template-columns: 1fr; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🎉 Order Confirmed!</h1>
+                    <p>Thank you for your purchase. Your order has been received and is being processed.</p>
+                </div>
+                
+                <div class="content">
+                    <div class="section">
+                        <div class="section-title">Order Summary</div>
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <div class="info-label">Order ID</div>
+                                <div class="info-value order-id">${order._id}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Order Date</div>
+                                <div class="info-value">${new Date(order.createdAt).toLocaleDateString('en-IN', { 
+                                    weekday: 'long', 
+                                    year: 'numeric', 
+                                    month: 'long', 
+                                    day: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                })}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Status</div>
+                                <div class="info-value">
+                                    <span class="status-badge status-pending">${order.status}</span>
+                                </div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Payment</div>
+                                <div class="info-value">Paid via Razorpay (${order.paymentInfo?.method || 'Online'})</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="highlight">
+                        <strong>📦 Delivery Address:</strong><br>
+                        ${order.userName || 'Customer'}<br>
+                        ${order.address}<br>
+                        📞 ${order.phone}<br>
+                        📧 ${order.email}
+                    </div>
+
+                    <div class="section">
+                        <div class="section-title">Order Details</div>
+                        <table class="order-table">
+                            <thead>
+                                <tr>
+                                    <th>Product</th>
+                                    <th style="text-align: center;">Qty</th>
+                                    <th style="text-align: right;">Price</th>
+                                    <th style="text-align: right;">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${itemsHtml}
+                                <tr class="total-row">
+                                    <td colspan="3" style="text-align: right; padding-right: 15px;"><strong>Total Amount:</strong></td>
+                                    <td style="text-align: right; font-size: 18px; color: #667eea;">
+                                        <strong>₹${order.totalAmount.toFixed(2)}</strong>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-title">Next Steps</div>
+                        <ul style="margin: 0; padding-left: 20px;">
+                            <li>Your order is being processed and will be shipped soon.</li>
+                            <li>You will receive shipping confirmation once your order is dispatched.</li>
+                            <li>For any queries, reply to this email or contact our support team.</li>
+                            <li>You can track your order status from your account dashboard.</li>
+                        </ul>
+                    </div>
+
+                    <div style="text-align: center; margin-top: 30px; padding: 15px; background: #f0f7ff; border-radius: 8px;">
+                        <strong>Need Help?</strong><br>
+                        Contact our customer support at 
+                        // <a href="mailto:support@Drbsk.com">support@Drbsk.com</a> 
+                        or call us at <strong>+91-9115513759</strong>
+                    </div>
+                </div>
+
+                <div class="footer">
+                    <p>Thank you for shopping with us! 🛍️</p>
+                    <p>
+                        <a href="${process.env.STORE_URL || 'https://yourstore.com'}">Visit Our Store</a> | 
+                        
+                    </p>
+                    <p style="margin-top: 15px; font-size: 12px; color: #888;">
+                        This is an automated email. Please do not reply directly to this message.
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+    `;
+};
+
+// Function to send order confirmation email
+const sendOrderConfirmationEmail = async (order, userEmail, userName) => {
+    try {
+        const mailOptions = {
+            from: {
+                name: process.env.STORE_NAME || 'Your Store',
+                address: process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@yourstore.com'
+            },
+            to: userEmail,
+            subject: `Order Confirmation #${order._id} - ${process.env.STORE_NAME || 'Your Store'}`,
+            html: generateOrderEmailTemplate(order, { email: userEmail, name: userName }),
+            text: `
+Order Confirmation #${order._id}
+
+Dear ${userName || 'Customer'},
+
+Thank you for your order! We have received your order and it is being processed.
+
+ORDER DETAILS:
+Order ID: ${order._id}
+Order Date: ${new Date(order.createdAt).toLocaleString()}
+Status: ${order.status}
+Total Amount: ₹${order.totalAmount.toFixed(2)}
+
+SHIPPING ADDRESS:
+${userName || 'Customer'}
+${order.address}
+Phone: ${order.phone}
+Email: ${userEmail}
+
+ORDER ITEMS:
+${order.items.map(item => `- ${item.name} x ${item.quantity}: ₹${item.price.toFixed(2)} each`).join('\n')}
+
+Total: ₹${order.totalAmount.toFixed(2)}
+
+Your order will be shipped soon. You will receive another email with tracking information once your order is dispatched.
+
+For any questions, please contact our customer support.
+
+Thank you for shopping with us!
+
+Best regards,
+${process.env.STORE_NAME || 'Your Store Team'}
+${process.env.STORE_URL || 'https://yourstore.com'}
+            `
+        };
+
+        console.log(`Sending order confirmation email to: ${userEmail}`);
+        
+        const info = await transporter.sendMail(mailOptions);
+        console.log(`✅ Order confirmation email sent: ${info.messageId}`);
+        
+        return {
+            success: true,
+            messageId: info.messageId,
+            email: userEmail
+        };
+    } catch (error) {
+        console.error('❌ Error sending order confirmation email:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
 
 // Helper function to process media URLs
 const processMediaUrl = (url) => {
@@ -27,9 +272,7 @@ const processMediaUrl = (url) => {
     return `${baseWithoutTrailingSlash}/${cleanUrl}`;
 };
 
-
 // routes/orderRoutes.js में:
-
 router.get('/orders/email/:email', async (req, res) => {
     const { email } = req.params;
 
@@ -95,20 +338,17 @@ router.get('/orders/email/:email', async (req, res) => {
     }
 });
 
-
-// routes/orderRoutes.js में:
-
+// Guest orders को linked करने का API
 router.post('/link-guest-orders', async (req, res) => {
     const { email, userId } = req.body;
 
     try {
-        // Find all guest orders with this email
         const guestOrders = await Order.find({
             $or: [
                 { email: { $regex: new RegExp(`^${email}$`, 'i') } },
                 { userEmail: { $regex: new RegExp(`^${email}$`, 'i') } }
             ],
-            userId: { $exists: false } // Only orders without userId
+            userId: { $exists: false }
         });
 
         if (guestOrders.length === 0) {
@@ -119,17 +359,9 @@ router.post('/link-guest-orders', async (req, res) => {
             });
         }
 
-        // Update all guest orders with userId
         const result = await Order.updateMany(
-            {
-                _id: { $in: guestOrders.map(order => order._id) }
-            },
-            {
-                $set: { 
-                    userId: userId,
-                    isGuest: false
-                }
-            }
+            { _id: { $in: guestOrders.map(order => order._id) } },
+            { $set: { userId: userId, isGuest: false } }
         );
 
         res.json({
@@ -147,11 +379,7 @@ router.post('/link-guest-orders', async (req, res) => {
     }
 });
 
-
-
-
 // Guest orders को logged-in user से link करने का API
-// ✅ Guest orders को logged-in user से link करने का API
 router.post('/orders/link-guest-orders', async (req, res) => {
     const { email, userId } = req.body;
 
@@ -167,7 +395,6 @@ router.post('/orders/link-guest-orders', async (req, res) => {
     }
 
     try {
-        // Step 1: Find all guest orders with this email but without userId or with guest userId
         const guestOrders = await Order.find({
             $or: [
                 { email: { $regex: new RegExp(`^${email}$`, 'i') } },
@@ -190,17 +417,9 @@ router.post('/orders/link-guest-orders', async (req, res) => {
             });
         }
 
-        // Step 2: Update all guest orders with current userId
         const result = await Order.updateMany(
-            {
-                _id: { $in: guestOrders.map(order => order._id) }
-            },
-            {
-                $set: { 
-                    userId: userId,
-                    isGuest: false
-                }
-            }
+            { _id: { $in: guestOrders.map(order => order._id) } },
+            { $set: { userId: userId, isGuest: false } }
         );
 
         console.log(`Linked ${result.modifiedCount} guest orders`);
@@ -226,9 +445,7 @@ router.post('/orders/link-guest-orders', async (req, res) => {
     }
 });
 
-
-
-// Create Order
+// Create Razorpay Order
 router.post('/createPaymentOrder', async (req, res) => {
     const { userId, items, address, phone, totalAmount, email } = req.body;
 
@@ -326,8 +543,6 @@ router.post('/createPaymentOrder', async (req, res) => {
             });
         }
 
-        // ✅ NO DATABASE ENTRY HERE - Only return Razorpay order details
-        
         res.status(200).json({
             success: true,
             message: "Payment order created",
@@ -349,6 +564,7 @@ router.post('/createPaymentOrder', async (req, res) => {
     }
 });
 
+// Verify Payment and Create Order with Email
 router.post('/verifyPayment', async (req, res) => {
     const { 
         razorpay_order_id, 
@@ -525,12 +741,14 @@ router.post('/verifyPayment', async (req, res) => {
             paymentInfo: {
                 paymentId: razorpay_payment_id,
                 amount: parseFloat(totalAmount),
-                status: 'captured', // ✅ Payment is captured
+                status: 'captured',
                 method: paymentDetails.method,
                 capturedAt: new Date(),
                 updatedAt: new Date()
             },
-            status: 'Pending', // ✅ Order status set to Pending
+            status: 'Pending',
+            emailSent: false,
+            emailError: null,
             createdAt: new Date()
         };
 
@@ -541,6 +759,35 @@ router.post('/verifyPayment', async (req, res) => {
             const newOrder = new Order(orderData);
             savedOrder = await newOrder.save();
             console.log("✅ Order created in database:", savedOrder._id);
+            
+            // ✅ SEND EMAIL HERE - After order is successfully saved
+            try {
+                console.log("Sending order confirmation email...");
+                const emailResult = await sendOrderConfirmationEmail(
+                    savedOrder.toObject(), 
+                    userEmail, 
+                    userName
+                );
+                
+                if (emailResult.success) {
+                    console.log(`✅ Order confirmation email sent to ${userEmail}`);
+                    savedOrder.emailSent = true;
+                    savedOrder.emailSentAt = new Date();
+                    savedOrder.emailError = null;
+                    await savedOrder.save();
+                } else {
+                    console.log(`⚠️ Email sending failed: ${emailResult.error}`);
+                    savedOrder.emailSent = false;
+                    savedOrder.emailError = emailResult.error;
+                    await savedOrder.save();
+                }
+            } catch (emailError) {
+                console.error("Error in email sending:", emailError);
+                savedOrder.emailSent = false;
+                savedOrder.emailError = emailError.message;
+                await savedOrder.save();
+            }
+            
         } catch (dbError) {
             console.error("Database error:", dbError);
             return res.status(500).json({
@@ -557,7 +804,8 @@ router.post('/verifyPayment', async (req, res) => {
                 razorpayOrderId: razorpay_order_id,
                 razorpayPaymentId: razorpay_payment_id,
                 userId: userId,
-                totalAmount: totalAmount
+                totalAmount: totalAmount,
+                emailSent: savedOrder.emailSent || false
             });
         }
 
@@ -574,7 +822,8 @@ router.post('/verifyPayment', async (req, res) => {
                 totalAmount: savedOrder.totalAmount,
                 createdAt: savedOrder.createdAt,
                 userEmail: savedOrder.userEmail,
-                userName: savedOrder.userName
+                userName: savedOrder.userName,
+                emailSent: savedOrder.emailSent || false
             }
         });
 
@@ -587,6 +836,7 @@ router.post('/verifyPayment', async (req, res) => {
         });
     }
 });
+
 // Update Order Status
 router.put('/orders/:orderId/status', async (req, res) => {
     const { orderId } = req.params;
@@ -640,7 +890,7 @@ router.put('/orders/:orderId/status', async (req, res) => {
                     const refund = await razorpayInstance.payments.refund(
                         order.paymentInfo.paymentId,
                         {
-                            amount: Math.round(order.totalAmount * 100), // Convert to paise
+                            amount: Math.round(order.totalAmount * 100),
                             speed: 'optimum',
                             notes: {
                                 reason: cancelReason || 'Order cancelled by admin',
@@ -656,7 +906,6 @@ router.put('/orders/:orderId/status', async (req, res) => {
                     console.log("Refund Amount:", refund.amount / 100);
                     console.log("Refund Status:", refund.status);
 
-                    // Calculate estimated settlement date
                     const estimatedSettlement = new Date();
                     estimatedSettlement.setDate(estimatedSettlement.getDate() + 5);
 
@@ -769,12 +1018,60 @@ router.put('/orders/:orderId/status', async (req, res) => {
     }
 });
 
+// Add endpoint to resend order confirmation email
+router.post('/orders/:orderId/resend-email', async (req, res) => {
+    const { orderId } = req.params;
+
+    try {
+        const order = await Order.findById(orderId);
+        if (!order) {
+            return res.status(404).json({
+                success: false,
+                message: "Order not found"
+            });
+        }
+
+        const emailResult = await sendOrderConfirmationEmail(
+            order.toObject(),
+            order.userEmail || order.email,
+            order.userName || 'Customer'
+        );
+
+        if (emailResult.success) {
+            order.emailSent = true;
+            order.emailSentAt = new Date();
+            order.emailError = null;
+            await order.save();
+
+            res.status(200).json({
+                success: true,
+                message: "Order confirmation email resent successfully",
+                email: order.userEmail || order.email,
+                messageId: emailResult.messageId
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                message: "Failed to resend email",
+                error: emailResult.error
+            });
+        }
+
+    } catch (error) {
+        console.error("Error resending email:", error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to resend order confirmation email",
+            error: error.message
+        });
+    }
+});
+
 // Get Payment Status
 router.get('/paymentStatus/:razorpayOrderId', async (req, res) => {
     const { razorpayOrderId } = req.params;
 
     try {
-        // Check in database first
         const order = await Order.findOne({ razorpayOrderId: razorpayOrderId });
         
         if (order) {
@@ -786,7 +1083,6 @@ router.get('/paymentStatus/:razorpayOrderId', async (req, res) => {
             });
         }
 
-        // Check with Razorpay
         const razorpayOrder = await razorpayInstance.orders.fetch(razorpayOrderId);
         const payments = await razorpayInstance.orders.fetchPayments(razorpayOrderId);
 
@@ -806,6 +1102,8 @@ router.get('/paymentStatus/:razorpayOrderId', async (req, res) => {
         });
     }
 });
+
+// Get Orders by Email
 router.get('/orders/by-email/:email', async (req, res) => {
     const { email } = req.params;
 
@@ -820,7 +1118,6 @@ router.get('/orders/by-email/:email', async (req, res) => {
     }
 
     try {
-        // Email से orders fetch करें (case insensitive search)
         const orders = await Order.find({ 
             $or: [
                 { email: { $regex: new RegExp(`^${email}$`, 'i') } },
@@ -837,19 +1134,15 @@ router.get('/orders/by-email/:email', async (req, res) => {
 
         console.log(`Found ${orders.length} orders for email: ${email}`);
 
-        // Process media URLs
         const processedOrders = orders.map(order => {
             if (order.items) {
                 order.items = order.items.map(item => {
-                    // If item already has media (from createOrder), use it
                     if (item.media && Array.isArray(item.media) && item.media.length > 0) {
-                        // Process existing media URLs
                         item.media = item.media.map(mediaItem => ({
                             ...mediaItem,
                             url: processMediaUrl(mediaItem.url)
                         }));
                     }
-                    // If populated product has media, ensure URLs are complete
                     else if (item.productId && item.productId.media && Array.isArray(item.productId.media)) {
                         item.productId.media = item.productId.media.map(mediaItem => ({
                             ...mediaItem,
@@ -878,7 +1171,8 @@ router.get('/orders/by-email/:email', async (req, res) => {
         });
     }
 });
-// Get Orders by User ID (with product population and media URL processing)
+
+// Get Orders by User ID
 router.get('/orders/:userId', async (req, res) => {
     const { userId } = req.params;
 
@@ -892,19 +1186,15 @@ router.get('/orders/:userId', async (req, res) => {
             .sort({ createdAt: -1 })
             .lean();
 
-        // Process media URLs to ensure they're complete
         const processedOrders = orders.map(order => {
             if (order.items) {
                 order.items = order.items.map(item => {
-                    // If item already has media (from createOrder), use it
                     if (item.media && Array.isArray(item.media) && item.media.length > 0) {
-                        // Process existing media URLs
                         item.media = item.media.map(mediaItem => ({
                             ...mediaItem,
                             url: processMediaUrl(mediaItem.url)
                         }));
                     }
-                    // If populated product has media, ensure URLs are complete
                     else if (item.productId && item.productId.media && Array.isArray(item.productId.media)) {
                         item.productId.media = item.productId.media.map(mediaItem => ({
                             ...mediaItem,
@@ -946,7 +1236,6 @@ router.get('/orders', async (req, res) => {
             .sort({ createdAt: -1 })
             .lean();
 
-        // Process media URLs
         const processedOrders = orders.map(order => {
             if (order.items) {
                 order.items = order.items.map(item => {
@@ -1003,7 +1292,6 @@ router.get('/orders/:orderId/refund-status', async (req, res) => {
             });
         }
 
-        // Process media URLs
         if (order.items) {
             order.items = order.items.map(item => {
                 if (item.media && Array.isArray(item.media) && item.media.length > 0) {
@@ -1023,7 +1311,6 @@ router.get('/orders/:orderId/refund-status', async (req, res) => {
 
         let refundInfo = order.refundInfo || { status: 'none' };
 
-        // If refund exists, fetch latest status from Razorpay
         if (order.refundInfo?.refundId && order.paymentInfo?.paymentId) {
             try {
                 const refunds = await razorpayInstance.payments.fetchMultipleRefund(order.paymentInfo.paymentId);
@@ -1045,7 +1332,6 @@ router.get('/orders/:orderId/refund-status', async (req, res) => {
                         notes: order.refundInfo.notes
                     };
 
-                    // Update in database
                     await Order.findByIdAndUpdate(orderId, { refundInfo });
                 }
             } catch (error) {
@@ -1064,63 +1350,6 @@ router.get('/orders/:orderId/refund-status', async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Failed to fetch refund status",
-            error: error.message
-        });
-    }
-});
-
-// Capture Payment
-router.post('/capturePayment/:orderId', async (req, res) => {
-    const { orderId } = req.params;
-
-    try {
-        const order = await Order.findById(orderId);
-        if (!order) {
-            return res.status(404).json({
-                success: false,
-                message: "Order not found"
-            });
-        }
-
-        if (!order.paymentInfo?.paymentId) {
-            return res.status(400).json({
-                success: false,
-                message: "No payment found for this order"
-            });
-        }
-
-        if (order.paymentInfo.status !== 'authorized') {
-            return res.status(400).json({
-                success: false,
-                message: "Payment is not in authorized state"
-            });
-        }
-
-        // Capture the payment
-        const capturedPayment = await razorpayInstance.payments.capture(
-            order.paymentInfo.paymentId,
-            Math.round(order.totalAmount * 100),
-            'INR'
-        );
-
-        // Update order
-        order.paymentInfo.status = 'captured';
-        order.paymentInfo.capturedAt = new Date();
-        order.paymentInfo.updatedAt = new Date();
-
-        await order.save();
-
-        res.status(200).json({
-            success: true,
-            message: "Payment captured successfully",
-            paymentInfo: order.paymentInfo
-        });
-
-    } catch (error) {
-        console.error("Error capturing payment:", error);
-        res.status(500).json({
-            success: false,
-            message: "Failed to capture payment",
             error: error.message
         });
     }
@@ -1163,7 +1392,6 @@ router.get('/order/:orderId', async (req, res) => {
             });
         }
 
-        // Process media URLs
         if (order.items) {
             order.items = order.items.map(item => {
                 if (item.media && Array.isArray(item.media) && item.media.length > 0) {
