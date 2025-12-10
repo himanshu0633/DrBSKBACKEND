@@ -1,311 +1,10 @@
-// // // models/Order.js
-// // const mongoose = require('mongoose');
-
-// // const orderSchema = new mongoose.Schema({
-// //   userId: {
-// //     type: mongoose.Schema.Types.ObjectId,
-// //     required: true,
-// //     ref: 'User',
-// //   },
-// //   items: [
-// //     {
-// //       productId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'Product' },
-// //       name: String,
-// //       quantity: { type: Number, default: 1 },
-// //       price: Number,
-// //     }
-// //   ],
-// //   address: { type: String, required: true },
-// //   phone: { type: String, required: true },
-// //   totalAmount: { type: Number, required: true },
-// //   status: { type: String, default: 'Pending' },
-// //   paymentId: String,
-// //   createdAt: { type: Date, default: Date.now }
-// // });
-
-// // module.exports = mongoose.model('Order', orderSchema);
-
-
-// const mongoose = require('mongoose');
-
-// const orderSchema = new mongoose.Schema({
-//   userId: {
-//     type: mongoose.Schema.Types.ObjectId,
-//     required: true,
-//     ref: 'User',
-//   },
-//   items: [
-//     {
-//       productId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'Product' },
-//       name: String,
-//       quantity: { type: Number, default: 1 },
-//       price: Number,
-//     }
-//   ],
-//   address: { type: String, required: true },
-//   phone: { type: String, required: true },
-//   totalAmount: { type: Number, required: true },
-
-//   // Add these fields for Razorpay integration
-//   razorpayOrderId: { type: String }, // To store Razorpay order ID linked with this order
-//   paymentInfo: {
-//     paymentId: { type: String },
-//     amount: { type: Number },
-//     status: { type: String }, // e.g., 'captured', 'failed', 'refunded'
-//     updatedAt: { type: Date }
-//   },
-
-//   status: { type: String, default: 'Pending' }, 
-
-//   createdAt: { type: Date, default: Date.now }
-// });
-
-// module.exports = mongoose.model('Order', orderSchema);
-
-
-// // 3:
-// const mongoose = require('mongoose');
-
-// const orderSchema = new mongoose.Schema({
-//   userId: {
-//     type: mongoose.Schema.Types.ObjectId,
-//     required: true,
-//     ref: 'Admin', // Changed to Admin since that's your user model
-//   },
-//   userEmail: {
-//     type: String,
-//     required: true,
-//     trim: true
-//   },
-//   userName: {
-//     type: String,
-//     required: true,
-//     trim: true
-//   },
-//   items: [
-//     {
-//       productId: {
-//         type: mongoose.Schema.Types.ObjectId,
-//         required: true,
-//         ref: 'Product'
-//       },
-//       name: {
-//         type: String,
-//         required: true
-//       },
-//       quantity: {
-//         type: Number,
-//         required: true,
-//         min: 1
-//       },
-//       price: {
-//         type: Number,
-//         required: true,
-//         min: 0
-//       }
-//     }
-//   ],
-//   address: {
-//     type: String,
-//     required: true,
-//     trim: true
-//   },
-//   phone: {
-//     type: String,
-//     required: true,
-//     trim: true
-//   },
-//   totalAmount: {
-//     type: Number,
-//     required: true,
-//     min: 0
-//   },
-
-//   // Razorpay integration
-//   razorpayOrderId: {
-//     type: String,
-//     unique: true,
-//     sparse: true
-//   },
-
-//   // Payment information
-//   paymentInfo: {
-//     paymentId: { type: String, default: null },
-//     amount: { type: Number, min: 0 },
-//     status: {
-//       type: String,
-//       enum: ['pending', 'created', 'authorized', 'captured', 'failed', 'refunded'],
-//       default: 'pending'
-//     },
-//     method: { type: String, default: null },
-//     capturedAt: { type: Date },
-//     failedAt: { type: Date },
-//     updatedAt: { type: Date, default: Date.now }
-//   },
-
-//   // Refund information
-//   refundInfo: {
-//     refundId: { type: String, default: null },
-//     amount: { type: Number, min: 0, default: 0 },
-//     status: {
-//       type: String,
-//       enum: ['none', 'initiated', 'processed', 'failed'],
-//       default: 'none'
-//     },
-//     reason: { type: String, trim: true },
-//     initiatedAt: { type: Date },
-//     processedAt: { type: Date },
-//     failedAt: { type: Date },
-//     estimatedSettlement: { type: Date },
-//     speed: {
-//       type: String,
-//       enum: ['normal', 'optimum'],
-//       default: 'optimum'
-//     }
-//   },
-
-//   // Order status
-//   status: {
-//     type: String,
-//     enum: ['Pending', 'Delivered', 'Cancelled', 'Refunded'],
-//     default: 'Pending'
-//   },
-
-//   // Cancellation details
-//   cancelReason: { type: String, trim: true },
-//   cancelledBy: {
-//     type: String,
-//     enum: ['admin', 'user', 'system']
-//   },
-//   cancelledAt: { type: Date },
-
-// }, {
-//   timestamps: true,
-//   toJSON: { virtuals: true },
-//   toObject: { virtuals: true }
-// });
-
-// // Indexes for performance
-// orderSchema.index({ userId: 1, createdAt: -1 });
-// orderSchema.index({ razorpayOrderId: 1 });
-// orderSchema.index({ 'paymentInfo.paymentId': 1 });
-// orderSchema.index({ status: 1 });
-// orderSchema.index({ userEmail: 1 });
-
-// // Virtual for payment status display
-// orderSchema.virtual('paymentStatusDisplay').get(function () {
-//   const status = this.paymentInfo?.status || 'pending';
-//   switch (status) {
-//     case 'captured': return 'Paid';
-//     case 'authorized': return 'Authorized (Pending Capture)';
-//     case 'failed': return 'Payment Failed';
-//     case 'pending': return 'Payment Pending';
-//     case 'created': return 'Payment Initiated';
-//     default: return status.charAt(0).toUpperCase() + status.slice(1);
-//   }
-// });
-
-// // Virtual for refund status display
-// orderSchema.virtual('refundStatusDisplay').get(function () {
-//   const status = this.refundInfo?.status || 'none';
-//   switch (status) {
-//     case 'none': return 'No Refund';
-//     case 'initiated': return 'Refund Initiated';
-//     case 'processed': return 'Refund Processed';
-//     case 'failed': return 'Refund Failed';
-//     default: return status.charAt(0).toUpperCase() + status.slice(1);
-//   }
-// });
-
-// // Virtual for estimated settlement display
-// orderSchema.virtual('estimatedSettlementDisplay').get(function () {
-//   if (!this.refundInfo?.estimatedSettlement) return null;
-
-//   const now = new Date();
-//   const settlement = new Date(this.refundInfo.estimatedSettlement);
-//   const diffTime = settlement - now;
-//   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-//   if (diffDays <= 0) return 'Should be settled by now';
-//   if (diffDays === 1) return 'Expected by tomorrow';
-//   return `Expected in ${diffDays} days`;
-// });
-
-// // Pre-save validation
-// orderSchema.pre('save', function (next) {
-//   // Validate total amount matches items
-//   const calculatedTotal = this.items.reduce((total, item) => {
-//     return total + (item.price * item.quantity);
-//   }, 0);
-
-//   if (Math.abs(this.totalAmount - calculatedTotal) > 0.01) {
-//     return next(new Error(`Total amount mismatch: expected ${calculatedTotal}, got ${this.totalAmount}`));
-//   }
-
-//   // Handle status changes
-//   if (this.isModified('status')) {
-//     if (this.status === 'Cancelled' && !this.cancelledAt) {
-//       this.cancelledAt = new Date();
-//       if (!this.cancelledBy) this.cancelledBy = 'system';
-//     }
-//   }
-
-//   // Update payment timestamps
-//   if (this.isModified('paymentInfo.status')) {
-//     const now = new Date();
-//     if (this.paymentInfo.status === 'captured' && !this.paymentInfo.capturedAt) {
-//       this.paymentInfo.capturedAt = now;
-//     } else if (this.paymentInfo.status === 'failed' && !this.paymentInfo.failedAt) {
-//       this.paymentInfo.failedAt = now;
-//     }
-//     this.paymentInfo.updatedAt = now;
-//   }
-
-//   // Update refund timestamps
-//   if (this.isModified('refundInfo.status')) {
-//     const now = new Date();
-//     if (this.refundInfo.status === 'initiated' && !this.refundInfo.initiatedAt) {
-//       this.refundInfo.initiatedAt = now;
-//     } else if (this.refundInfo.status === 'processed' && !this.refundInfo.processedAt) {
-//       this.refundInfo.processedAt = now;
-//     } else if (this.refundInfo.status === 'failed' && !this.refundInfo.failedAt) {
-//       this.refundInfo.failedAt = now;
-//     }
-//   }
-
-//   next();
-// });
-
-// // Static methods for admin queries
-// orderSchema.statics.findPaymentIssues = function () {
-//   return this.find({
-//     $or: [
-//       { 'paymentInfo.status': 'failed' },
-//       { 'paymentInfo.status': 'authorized', createdAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
-//     ]
-//   });
-// };
-
-// orderSchema.statics.findPendingRefunds = function () {
-//   return this.find({
-//     status: 'Cancelled',
-//     'paymentInfo.status': 'captured',
-//     'refundInfo.status': { $in: ['none', 'initiated'] }
-//   });
-// };
-
-// module.exports = mongoose.model('Order', orderSchema);
-
-
-
-// // final:
 const mongoose = require('mongoose');
 
 const orderSchema = new mongoose.Schema({
+  // userId can be ObjectId for registered users OR string for guest users
   userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true,
-    ref: 'Admin', // Changed to Admin since that's your user model
+    type: mongoose.Schema.Types.Mixed, // Changed from ObjectId to Mixed
+    required: true
   },
   userEmail: {
     type: String,
@@ -316,6 +15,12 @@ const orderSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true
+  },
+  email: { // Add email field for better tracking
+    type: String,
+    required: true,
+    trim: true,
+    lowercase: true
   },
   items: [
     {
@@ -337,7 +42,17 @@ const orderSchema = new mongoose.Schema({
         type: Number,
         required: true,
         min: 0
-      }
+      },
+      // Add media field to store product images
+      media: [{
+        url: String,
+        type: {
+          type: String,
+          enum: ['image', 'video']
+        }
+      }],
+      category: String,
+      description: String
     }
   ],
   address: {
@@ -356,6 +71,12 @@ const orderSchema = new mongoose.Schema({
     min: 0
   },
 
+  // Guest user flag
+  isGuest: {
+    type: Boolean,
+    default: false
+  },
+
   // Razorpay integration
   razorpayOrderId: {
     type: String,
@@ -370,7 +91,7 @@ const orderSchema = new mongoose.Schema({
     status: {
       type: String,
       enum: ['pending', 'created', 'authorized', 'captured', 'failed', 'refunded'],
-      default: 'pending'
+      default: 'created' // Changed from 'pending' to 'created'
     },
     method: { type: String, default: null },
     capturedAt: { type: Date },
@@ -378,14 +99,14 @@ const orderSchema = new mongoose.Schema({
     updatedAt: { type: Date, default: Date.now }
   },
 
-  // Refund information - FIXED: No default refund status
+  // Refund information
   refundInfo: {
     refundId: { type: String, default: null },
     amount: { type: Number, min: 0, default: 0 },
     status: {
       type: String,
       enum: ['none', 'initiated', 'processed', 'failed'],
-      default: 'none'  // CHANGED: Default to 'none' instead of created
+      default: 'none'
     },
     reason: { type: String, trim: true },
     initiatedAt: { type: Date },
@@ -396,14 +117,13 @@ const orderSchema = new mongoose.Schema({
       type: String,
       enum: ['normal', 'optimum'],
       default: 'optimum'
-    },
-    notes: { type: String, default: null }
+    }
   },
 
   // Order status
   status: {
     type: String,
-    enum: ['Pending', 'Delivered', 'Cancelled', 'Refunded'],
+    enum: ['Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled', 'Refunded'],
     default: 'Pending'
   },
 
@@ -414,6 +134,12 @@ const orderSchema = new mongoose.Schema({
     enum: ['admin', 'user', 'system']
   },
   cancelledAt: { type: Date },
+
+  // Delivery tracking
+  trackingNumber: { type: String, default: null },
+  courierName: { type: String, default: null },
+  expectedDelivery: { type: Date },
+  deliveredAt: { type: Date },
 
 }, {
   timestamps: true,
@@ -427,10 +153,14 @@ orderSchema.index({ razorpayOrderId: 1 });
 orderSchema.index({ 'paymentInfo.paymentId': 1 });
 orderSchema.index({ status: 1 });
 orderSchema.index({ userEmail: 1 });
+orderSchema.index({ email: 1 });
+orderSchema.index({ isGuest: 1 });
+orderSchema.index({ createdAt: -1 });
+orderSchema.index({ 'paymentInfo.status': 1 });
 
 // Virtual for payment status display
 orderSchema.virtual('paymentStatusDisplay').get(function () {
-  const status = this.paymentInfo?.status || 'pending';
+  const status = this.paymentInfo?.status || 'created';
   switch (status) {
     case 'captured': return 'Paid';
     case 'authorized': return 'Authorized (Pending Capture)';
@@ -467,8 +197,26 @@ orderSchema.virtual('estimatedSettlementDisplay').get(function () {
   return `Expected in ${diffDays} days`;
 });
 
+// Virtual to check if user is guest
+orderSchema.virtual('isGuestUser').get(function () {
+  return this.isGuest || (typeof this.userId === 'string' && this.userId.startsWith('guest_'));
+});
+
+// Virtual to get user type
+orderSchema.virtual('userType').get(function () {
+  if (this.isGuest || (typeof this.userId === 'string' && this.userId.startsWith('guest_'))) {
+    return 'Guest';
+  }
+  return 'Registered';
+});
+
 // Pre-save validation and status management
 orderSchema.pre('save', function (next) {
+  // Auto-detect guest user
+  if (typeof this.userId === 'string' && this.userId.startsWith('guest_')) {
+    this.isGuest = true;
+  }
+
   // Validate total amount matches items
   const calculatedTotal = this.items.reduce((total, item) => {
     return total + (item.price * item.quantity);
@@ -480,18 +228,30 @@ orderSchema.pre('save', function (next) {
 
   // Handle status changes
   if (this.isModified('status')) {
+    const now = new Date();
+    
     if (this.status === 'Cancelled' && !this.cancelledAt) {
-      this.cancelledAt = new Date();
-      if (!this.cancelledBy) this.cancelledBy = 'system';
+      this.cancelledAt = now;
+      if (!this.cancelledBy) this.cancelledBy = 'user';
+    }
+    
+    if (this.status === 'Delivered' && !this.deliveredAt) {
+      this.deliveredAt = now;
     }
   }
 
   // Update payment timestamps
   if (this.isModified('paymentInfo.status')) {
     const now = new Date();
-    if (this.paymentInfo.status === 'captured' && !this.paymentInfo.capturedAt) {
+    const paymentStatus = this.paymentInfo.status;
+    
+    if (paymentStatus === 'captured' && !this.paymentInfo.capturedAt) {
       this.paymentInfo.capturedAt = now;
-    } else if (this.paymentInfo.status === 'failed' && !this.paymentInfo.failedAt) {
+      // Auto update order status to Confirmed when payment is captured
+      if (this.status === 'Pending') {
+        this.status = 'Confirmed';
+      }
+    } else if (paymentStatus === 'failed' && !this.paymentInfo.failedAt) {
       this.paymentInfo.failedAt = now;
     }
     this.paymentInfo.updatedAt = now;
@@ -500,11 +260,13 @@ orderSchema.pre('save', function (next) {
   // Update refund timestamps
   if (this.isModified('refundInfo.status')) {
     const now = new Date();
-    if (this.refundInfo.status === 'initiated' && !this.refundInfo.initiatedAt) {
+    const refundStatus = this.refundInfo.status;
+    
+    if (refundStatus === 'initiated' && !this.refundInfo.initiatedAt) {
       this.refundInfo.initiatedAt = now;
-    } else if (this.refundInfo.status === 'processed' && !this.refundInfo.processedAt) {
+    } else if (refundStatus === 'processed' && !this.refundInfo.processedAt) {
       this.refundInfo.processedAt = now;
-    } else if (this.refundInfo.status === 'failed' && !this.refundInfo.failedAt) {
+    } else if (refundStatus === 'failed' && !this.refundInfo.failedAt) {
       this.refundInfo.failedAt = now;
     }
   }
@@ -512,7 +274,34 @@ orderSchema.pre('save', function (next) {
   next();
 });
 
-// Static methods for admin queries
+// Pre-validate to ensure either ObjectId or guest string
+orderSchema.pre('validate', function (next) {
+  // Check if userId is valid
+  if (!this.userId) {
+    return next(new Error('userId is required'));
+  }
+
+  // Check if it's a valid ObjectId or guest string
+  if (typeof this.userId === 'string') {
+    if (this.userId.startsWith('guest_')) {
+      // Valid guest ID
+      next();
+    } else if (mongoose.Types.ObjectId.isValid(this.userId)) {
+      // Valid ObjectId string
+      this.userId = new mongoose.Types.ObjectId(this.userId);
+      next();
+    } else {
+      return next(new Error('Invalid userId format'));
+    }
+  } else if (this.userId instanceof mongoose.Types.ObjectId) {
+    // Valid ObjectId
+    next();
+  } else {
+    return next(new Error('userId must be either ObjectId or guest string'));
+  }
+});
+
+// Static methods
 orderSchema.statics.findPaymentIssues = function () {
   return this.find({
     $or: [
@@ -528,6 +317,46 @@ orderSchema.statics.findPendingRefunds = function () {
     'paymentInfo.status': 'captured',
     'refundInfo.status': { $in: ['none', 'initiated'] }
   });
+};
+
+orderSchema.statics.findGuestOrders = function () {
+  return this.find({
+    $or: [
+      { isGuest: true },
+      { userId: /^guest_/ }
+    ]
+  });
+};
+
+orderSchema.statics.findByEmail = function (email) {
+  return this.find({
+    $or: [
+      { email: email },
+      { userEmail: email }
+    ]
+  }).sort({ createdAt: -1 });
+};
+
+// Instance method to check if user can modify order
+orderSchema.methods.canModify = function (userId) {
+  if (this.isGuest) {
+    return this.userId === userId;
+  }
+  return this.userId.toString() === userId.toString();
+};
+
+// Instance method to get order summary
+orderSchema.methods.getSummary = function () {
+  return {
+    orderId: this._id,
+    totalAmount: this.totalAmount,
+    status: this.status,
+    paymentStatus: this.paymentInfo.status,
+    itemsCount: this.items.length,
+    createdAt: this.createdAt,
+    userType: this.userType,
+    email: this.email
+  };
 };
 
 module.exports = mongoose.model('Order', orderSchema);

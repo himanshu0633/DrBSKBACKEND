@@ -5,52 +5,40 @@ const Admin = require('../models/admin');
 const Product = require('../models/product');
 const { logger } = require("../utils/logger");
 const Razorpay = require('razorpay');
-
+const crypto = require('crypto');
 // Initialize Razorpay instance
 const razorpayInstance = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
+    key_id:"rzp_test_RpQ1JwSJEy6yAw",
+    key_secret: "1XsoSE1HMxnMUbIoC3V3An6n",
 });
 
 // Helper function to process media URLs
 const processMediaUrl = (url) => {
     if (!url) return '';
     
-    // If already a full URL, return as is
     if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
         return url;
     }
     
-    // If it's a relative path, prepend base URL
     const cleanUrl = url.startsWith('/') ? url.substring(1) : url;
-    
-    // Use environment variable or default to localhost
     const baseUrl = process.env.BASE_URL || 'http://localhost:5000';
     const baseWithoutTrailingSlash = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
     
     return `${baseWithoutTrailingSlash}/${cleanUrl}`;
 };
-
 // Create Order
-router.post('/createOrder', async (req, res) => {
-    const { userId, items, address, phone, totalAmount } = req.body;
+router.post('/createPaymentOrder', async (req, res) => {
+    const { userId, items, address, phone, totalAmount, email } = req.body;
 
-    console.log("=== CREATE ORDER REQUEST ===");
-    console.log("Full request body:", JSON.stringify(req.body, null, 2));
+    console.log("=== CREATE RAZORPAY ORDER REQUEST ===");
+    console.log("Request body:", JSON.stringify(req.body, null, 2));
 
     try {
-        // Comprehensive validation
-        if (!userId) {
+        // Validation
+        if (!userId || !items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: "User ID is required"
-            });
-        }
-
-        if (!items || !Array.isArray(items) || items.length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: "Items are required and must be a non-empty array"
+                message: "User ID and items are required"
             });
         }
 
@@ -75,52 +63,11 @@ router.post('/createOrder', async (req, res) => {
             });
         }
 
-        // Fetch user details
-        console.log("Fetching user with ID:", userId);
-        const user = await Admin.findById(userId);
-        if (!user) {
-            console.error("User not found:", userId);
-            return res.status(404).json({
-                success: false,
-                message: "User not found"
-            });
-        }
-
-        console.log("User found:", {
-            id: user._id,
-            email: user.email,
-            name: user.name
-        });
-
-        // Validate items structure
-        for (let i = 0; i < items.length; i++) {
-            const item = items[i];
-            console.log(`Validating item ${i}:`, item);
-
-            if (!item.productId || !item.name || !item.quantity || item.quantity < 1 || item.price === undefined || item.price < 0) {
-                console.error(`Invalid item at index ${i}:`, item);
-                return res.status(400).json({
-                    success: false,
-                    message: `Invalid item at index ${i}. Each item needs productId, name, quantity (≥1), and price (≥0)`
-                });
-            }
-        }
-
-        // Calculate and validate total
-        const calculatedTotal = items.reduce((total, item) => {
-            return total + (parseFloat(item.price) * parseInt(item.quantity));
-        }, 0);
-
-        console.log("Amount validation:", {
-            calculatedTotal,
-            providedTotal: totalAmount,
-            difference: Math.abs(totalAmount - calculatedTotal)
-        });
-
-        if (Math.abs(totalAmount - calculatedTotal) > 0.01) {
+        // Email validation
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
             return res.status(400).json({
                 success: false,
-                message: `Total amount mismatch. Expected: ${calculatedTotal}, Received: ${totalAmount}`
+                message: "Valid email address is required"
             });
         }
 
@@ -135,37 +82,19 @@ router.post('/createOrder', async (req, res) => {
         }
         formattedPhone = `+91${formattedPhone}`;
 
-        console.log("Formatted phone:", formattedPhone);
-
-        // Check if razorpayInstance is properly initialized
-        if (!razorpayInstance) {
-            console.error("Razorpay instance not initialized!");
-            return res.status(500).json({
-                success: false,
-                message: "Payment gateway configuration error. Please contact support.",
-                error: "Razorpay not initialized"
-            });
-        }
-
-        // Verify Razorpay credentials are set
+        // Check Razorpay credentials
         if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-            console.error("Razorpay credentials missing in environment variables");
+            console.error("Razorpay credentials missing");
             return res.status(500).json({
                 success: false,
-                message: "Payment gateway configuration error. Please contact support.",
-                error: "Missing Razorpay credentials"
+                message: "Payment gateway configuration error"
             });
         }
 
-        console.log("Razorpay credentials present:", {
-            keyId: process.env.RAZORPAY_KEY_ID?.substring(0, 10) + '...',
-            keySecretPresent: !!process.env.RAZORPAY_KEY_SECRET
-        });
-
-        // Create Razorpay Order
-        console.log("Creating Razorpay order...");
+        // Calculate amount
         const amountInPaise = Math.round(totalAmount * 100);
         
+        // Create Razorpay Order
         const razorpayOrderData = {
             amount: amountInPaise,
             currency: "INR",
@@ -173,59 +102,186 @@ router.post('/createOrder', async (req, res) => {
             notes: {
                 userId: userId.toString(),
                 phone: formattedPhone,
-                itemCount: items.length.toString()
+                email: email,
+                address: address,
+                itemsCount: items.length.toString(),
+                amount: totalAmount.toString()
             }
         };
 
-        console.log("Razorpay order request:", JSON.stringify(razorpayOrderData, null, 2));
+        console.log("Creating Razorpay order with data:", razorpayOrderData);
 
         let razorpayOrder;
         try {
             razorpayOrder = await razorpayInstance.orders.create(razorpayOrderData);
-            console.log("Razorpay order created successfully:", {
-                id: razorpayOrder.id,
-                amount: razorpayOrder.amount,
-                currency: razorpayOrder.currency,
-                status: razorpayOrder.status
-            });
+            console.log("Razorpay order created:", razorpayOrder.id);
         } catch (razorpayError) {
-            console.error("=== RAZORPAY ERROR ===");
-            console.error("Error type:", razorpayError.constructor.name);
-            console.error("Error message:", razorpayError.message);
-            console.error("Error details:", JSON.stringify(razorpayError, null, 2));
-            
-            let errorDetails = "Unknown error";
-            if (razorpayError.error) {
-                errorDetails = JSON.stringify(razorpayError.error);
-            } else if (razorpayError.description) {
-                errorDetails = razorpayError.description;
-            } else if (razorpayError.message) {
-                errorDetails = razorpayError.message;
-            }
-            
-            console.error("Extracted error details:", errorDetails);
-            
+            console.error("Razorpay error:", razorpayError.message);
             return res.status(500).json({
                 success: false,
                 message: "Failed to create payment order. Please try again.",
-                error: "Payment gateway error",
-                details: process.env.NODE_ENV === 'development' ? errorDetails : undefined
+                error: razorpayError.message
             });
         }
 
-        // Create order in database - WITH MEDIA
-        console.log("Creating database order...");
+        // ✅ NO DATABASE ENTRY HERE - Only return Razorpay order details
         
+        res.status(200).json({
+            success: true,
+            message: "Payment order created",
+            order: {
+                id: razorpayOrder.id,
+                amount: razorpayOrder.amount,
+                currency: razorpayOrder.currency,
+                receipt: razorpayOrder.receipt
+            }
+        });
+
+    } catch (error) {
+        console.error("Error creating Razorpay order:", error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to create payment order",
+            error: error.message
+        });
+    }
+});
+
+router.post('/verifyPayment', async (req, res) => {
+    const { 
+        razorpay_order_id, 
+        razorpay_payment_id, 
+        razorpay_signature,
+        userId,
+        items,
+        address,
+        phone,
+        email,
+        totalAmount
+    } = req.body;
+
+    console.log("=== VERIFY PAYMENT REQUEST ===");
+    console.log("Payment verification data:", {
+        razorpay_order_id,
+        razorpay_payment_id,
+        userId,
+        itemsCount: items?.length,
+        email: email
+    });
+
+    try {
+        // Validate required fields
+        if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            return res.status(400).json({
+                success: false,
+                message: "Payment verification data is incomplete"
+            });
+        }
+
+        if (!userId || !items || !Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Order data is incomplete"
+            });
+        }
+
+        // Verify payment signature
+        const generatedSignature = crypto
+            .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+            .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+            .digest('hex');
+
+        console.log("Signature verification:", {
+            received: razorpay_signature,
+            generated: generatedSignature,
+            match: generatedSignature === razorpay_signature
+        });
+
+        if (generatedSignature !== razorpay_signature) {
+            console.error("❌ Signature verification failed!");
+            return res.status(400).json({
+                success: false,
+                message: "Invalid payment signature. Payment verification failed."
+            });
+        }
+
+        console.log("✅ Payment signature verified successfully");
+
+        // Fetch payment details from Razorpay
+        let paymentDetails;
+        try {
+            paymentDetails = await razorpayInstance.payments.fetch(razorpay_payment_id);
+            console.log("Payment details from Razorpay:", {
+                id: paymentDetails.id,
+                status: paymentDetails.status,
+                amount: paymentDetails.amount,
+                method: paymentDetails.method
+            });
+        } catch (error) {
+            console.error("Error fetching payment details:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Failed to fetch payment details from gateway"
+            });
+        }
+
+        // Check if payment is captured
+        if (paymentDetails.status !== 'captured') {
+            console.error("❌ Payment not captured:", paymentDetails.status);
+            return res.status(400).json({
+                success: false,
+                message: `Payment is ${paymentDetails.status}. Order cannot be created.`
+            });
+        }
+
+        console.log("✅ Payment captured successfully");
+
+        // Prepare user details
+        let userEmail = email;
+        let userName = 'Customer';
+        let isGuest = false;
+
+        if (userId.startsWith('guest_')) {
+            console.log("Processing guest order");
+            isGuest = true;
+            userName = email.split('@')[0] || 'Customer';
+        } else {
+            try {
+                const user = await Admin.findById(userId);
+                if (user) {
+                    userEmail = user.email || email;
+                    userName = user.name || email.split('@')[0] || 'Customer';
+                } else {
+                    isGuest = true;
+                    userName = email.split('@')[0] || 'Customer';
+                }
+            } catch (error) {
+                console.error("Error fetching user:", error.message);
+                isGuest = true;
+            }
+        }
+
+        // Prepare phone number
+        let formattedPhone = phone.toString().trim();
+        formattedPhone = formattedPhone.replace(/^\+91/, '').replace(/^91/, '');
+        if (!/^\d{10}$/.test(formattedPhone)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid phone number format"
+            });
+        }
+        formattedPhone = `+91${formattedPhone}`;
+
+        // Prepare items with media
+        console.log("Preparing order items...");
         const itemsWithMedia = await Promise.all(items.map(async (item) => {
             let media = [];
             let productDetails = {};
             
             try {
-                // Fetch product details including media
                 const product = await Product.findById(item.productId);
                 if (product) {
                     media = product.media || [];
-                    // Process media URLs
                     media = media.map(mediaItem => ({
                         ...mediaItem,
                         url: processMediaUrl(mediaItem.url)
@@ -244,65 +300,51 @@ router.post('/createOrder', async (req, res) => {
                 name: item.name.toString().trim(),
                 quantity: parseInt(item.quantity),
                 price: parseFloat(item.price),
-                media: media, // Save media in order
-                ...productDetails // Save additional product details
+                media: media,
+                ...productDetails
             };
         }));
 
+        // Create order in database - ONLY AFTER PAYMENT VERIFICATION ✅
+        console.log("Creating database order...");
+        
         const orderData = {
             userId: userId,
-            userEmail: user.email || '',
-            userName: user.name || 'Customer',
+            userEmail: userEmail,
+            userName: userName,
+            email: email,
             items: itemsWithMedia,
             address: address.toString().trim(),
             phone: formattedPhone,
             totalAmount: parseFloat(totalAmount),
-            razorpayOrderId: razorpayOrder.id,
+            razorpayOrderId: razorpay_order_id,
+            razorpayPaymentId: razorpay_payment_id,
+            isGuest: isGuest,
             paymentInfo: {
+                paymentId: razorpay_payment_id,
                 amount: parseFloat(totalAmount),
-                status: 'created',
-                razorpayOrderId: razorpayOrder.id,
+                status: 'captured', // ✅ Payment is captured
+                method: paymentDetails.method,
+                capturedAt: new Date(),
                 updatedAt: new Date()
             },
-            status: 'Pending',
+            status: 'Pending', // ✅ Order status set to Pending
             createdAt: new Date()
         };
 
-        console.log("Database order data:", JSON.stringify(orderData, null, 2));
+        console.log("Order data for database:", JSON.stringify(orderData, null, 2));
 
         let savedOrder;
         try {
             const newOrder = new Order(orderData);
             savedOrder = await newOrder.save();
-            console.log("Database order created successfully:", savedOrder._id);
+            console.log("✅ Order created in database:", savedOrder._id);
         } catch (dbError) {
-            console.error("=== DATABASE ERROR ===");
-            console.error("Error name:", dbError.name);
-            console.error("Error message:", dbError.message);
-            console.error("Error details:", JSON.stringify(dbError, null, 2));
-
-            if (dbError.name === 'ValidationError') {
-                const validationErrors = Object.values(dbError.errors).map(e => e.message);
-                return res.status(400).json({
-                    success: false,
-                    message: "Order validation failed: " + validationErrors.join(', '),
-                    razorpayOrderId: razorpayOrder.id
-                });
-            }
-
-            if (dbError.code === 11000) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Duplicate order detected. Please try again.",
-                    razorpayOrderId: razorpayOrder.id
-                });
-            }
-
+            console.error("Database error:", dbError);
             return res.status(500).json({
                 success: false,
-                message: "Failed to save order. Please contact support with Razorpay Order ID: " + razorpayOrder.id,
-                error: "Database error",
-                razorpayOrderId: razorpayOrder.id
+                message: "Failed to save order to database",
+                error: dbError.message
             });
         }
 
@@ -310,9 +352,10 @@ router.post('/createOrder', async (req, res) => {
         if (typeof logger !== 'undefined' && logger && typeof logger.info === 'function') {
             logger.info("Order created successfully", {
                 orderId: savedOrder._id,
-                razorpayOrderId: razorpayOrder.id,
-                userId,
-                totalAmount
+                razorpayOrderId: razorpay_order_id,
+                razorpayPaymentId: razorpay_payment_id,
+                userId: userId,
+                totalAmount: totalAmount
             });
         }
 
@@ -321,11 +364,10 @@ router.post('/createOrder', async (req, res) => {
         // Send success response
         res.status(201).json({
             success: true,
-            message: "Order created successfully",
+            message: "Order created successfully!",
             orderId: savedOrder._id.toString(),
-            razorpayOrderId: razorpayOrder.id,
             order: {
-                _id: savedOrder._id.toString(),
+                _id: savedOrder._id,
                 status: savedOrder.status,
                 totalAmount: savedOrder.totalAmount,
                 createdAt: savedOrder.createdAt,
@@ -335,49 +377,14 @@ router.post('/createOrder', async (req, res) => {
         });
 
     } catch (error) {
-        console.error("=== UNEXPECTED ERROR ===");
-        console.error("Error type:", error.constructor.name);
-        console.error("Error message:", error.message);
-        console.error("Error stack:", error.stack);
-        console.error("Request data:", { 
-            userId, 
-            itemsCount: items?.length, 
-            totalAmount,
-            address: address?.substring(0, 50) + '...'
-        });
-
-        if (typeof logger !== 'undefined' && logger && typeof logger.error === 'function') {
-            logger.error("Order creation failed", {
-                error: error.message,
-                stack: error.stack,
-                userId,
-                totalAmount,
-                itemsCount: items?.length
-            });
-        }
-
-        let errorMessage = "Failed to create order. Please try again.";
-        let statusCode = 500;
-
-        if (error.name === 'CastError') {
-            errorMessage = "Invalid data format provided";
-            statusCode = 400;
-        } else if (error.name === 'ValidationError') {
-            errorMessage = "Order data validation failed";
-            statusCode = 400;
-        } else if (error.code === 11000) {
-            errorMessage = "Duplicate order detected";
-            statusCode = 400;
-        }
-
-        res.status(statusCode).json({
+        console.error("Error in verifyPayment:", error);
+        res.status(500).json({
             success: false,
-            message: errorMessage,
-            error: process.env.NODE_ENV === 'development' ? error.message : "Internal server error"
+            message: "Failed to verify payment and create order",
+            error: error.message
         });
     }
 });
-
 // Update Order Status
 router.put('/orders/:orderId/status', async (req, res) => {
     const { orderId } = req.params;
@@ -561,134 +568,114 @@ router.put('/orders/:orderId/status', async (req, res) => {
 });
 
 // Get Payment Status
-router.get('/paymentStatus/:orderId', async (req, res) => {
-    const { orderId } = req.params;
-
-    console.log("=== GET PAYMENT STATUS ===");
-    console.log("Order ID:", orderId);
+router.get('/paymentStatus/:razorpayOrderId', async (req, res) => {
+    const { razorpayOrderId } = req.params;
 
     try {
-        const order = await Order.findById(orderId)
-            .populate({
-                path: 'items.productId',
-                model: 'Product',
-                select: 'name price media category description'
-            })
-            .lean();
-            
-        if (!order) {
-            return res.status(404).json({
-                success: false,
-                message: "Order not found"
+        // Check in database first
+        const order = await Order.findOne({ razorpayOrderId: razorpayOrderId });
+        
+        if (order) {
+            return res.status(200).json({
+                success: true,
+                orderExists: true,
+                order: order,
+                message: "Order found in database"
             });
         }
 
-        // Process media URLs
-        if (order.items) {
-            order.items = order.items.map(item => {
-                if (item.media && Array.isArray(item.media) && item.media.length > 0) {
-                    item.media = item.media.map(mediaItem => ({
-                        ...mediaItem,
-                        url: processMediaUrl(mediaItem.url)
-                    }));
-                } else if (item.productId && item.productId.media && Array.isArray(item.productId.media)) {
-                    item.productId.media = item.productId.media.map(mediaItem => ({
-                        ...mediaItem,
-                        url: processMediaUrl(mediaItem.url)
-                    }));
-                }
-                return item;
-            });
-        }
-
-        let latestPaymentInfo = order.paymentInfo;
-        let latestRefundInfo = order.refundInfo;
-
-        // Fetch live data from Razorpay if order exists
-        if (order.razorpayOrderId) {
-            try {
-                const payments = await razorpayInstance.orders.fetchPayments(order.razorpayOrderId);
-                const latestPayment = payments.items.length ? payments.items[0] : null;
-
-                if (latestPayment) {
-                    latestPaymentInfo = {
-                        paymentId: latestPayment.id,
-                        amount: latestPayment.amount / 100,
-                        status: latestPayment.status,
-                        method: latestPayment.method,
-                        capturedAt: latestPayment.captured_at ? new Date(latestPayment.captured_at * 1000) : null,
-                        failedAt: latestPayment.failed_at ? new Date(latestPayment.failed_at * 1000) : null,
-                        updatedAt: new Date()
-                    };
-
-                    // Fetch refunds if payment is captured
-                    if (latestPayment.status === 'captured') {
-                        try {
-                            const refunds = await razorpayInstance.payments.fetchMultipleRefund(latestPayment.id);
-
-                            if (refunds.items.length > 0) {
-                                const latestRefund = refunds.items[0];
-                                const estimatedSettlement = new Date(latestRefund.created_at * 1000);
-                                estimatedSettlement.setDate(estimatedSettlement.getDate() + 5);
-
-                                latestRefundInfo = {
-                                    refundId: latestRefund.id,
-                                    amount: latestRefund.amount / 100,
-                                    status: latestRefund.status === 'processed' ? 'processed' : 'initiated',
-                                    reason: latestRefund.notes?.reason || order.cancelReason || 'Refund processed',
-                                    initiatedAt: new Date(latestRefund.created_at * 1000),
-                                    processedAt: latestRefund.processed_at ? new Date(latestRefund.processed_at * 1000) : null,
-                                    estimatedSettlement: estimatedSettlement,
-                                    speed: 'optimum',
-                                    notes: 'Refund from order cancellation'
-                                };
-                            } else if (order.status === 'Cancelled' && !order.refundInfo?.refundId) {
-                                // Order is cancelled but no refund exists
-                                latestRefundInfo = {
-                                    refundId: null,
-                                    amount: 0,
-                                    status: 'none',
-                                    reason: null,
-                                    initiatedAt: null,
-                                    processedAt: null,
-                                    estimatedSettlement: null,
-                                    speed: null,
-                                    notes: null
-                                };
-                            }
-                        } catch (refundError) {
-                            console.log('No refunds found for payment:', latestPayment.id);
-                        }
-                    }
-
-                    // Update order with latest info
-                    await Order.findByIdAndUpdate(orderId, {
-                        paymentInfo: latestPaymentInfo,
-                        refundInfo: latestRefundInfo
-                    });
-                }
-            } catch (razorpayError) {
-                console.error("Error fetching from Razorpay:", razorpayError.message);
-            }
-        }
+        // Check with Razorpay
+        const razorpayOrder = await razorpayInstance.orders.fetch(razorpayOrderId);
+        const payments = await razorpayInstance.orders.fetchPayments(razorpayOrderId);
 
         res.status(200).json({
             success: true,
-            paymentInfo: latestPaymentInfo,
-            refundInfo: latestRefundInfo,
-            order: order
+            orderExists: false,
+            razorpayOrder: razorpayOrder,
+            payments: payments,
+            message: "Order not in database, but found in Razorpay"
         });
 
     } catch (error) {
-        console.error("Error fetching payment status:", error);
+        console.error("Error checking payment status:", error);
         res.status(500).json({
             success: false,
-            message: "Failed to fetch payment status",
+            message: "Failed to check payment status"
+        });
+    }
+});
+router.get('/orders/by-email/:email', async (req, res) => {
+    const { email } = req.params;
+
+    console.log("=== FETCHING ORDERS BY EMAIL ===");
+    console.log("Email:", email);
+
+    if (!email) {
+        return res.status(400).json({
+            success: false,
+            message: "Email is required"
+        });
+    }
+
+    try {
+        // Email से orders fetch करें (case insensitive search)
+        const orders = await Order.find({ 
+            $or: [
+                { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+                { userEmail: { $regex: new RegExp(`^${email}$`, 'i') } }
+            ]
+        })
+        .populate({
+            path: 'items.productId',
+            model: 'Product',
+            select: 'name price media category description'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        console.log(`Found ${orders.length} orders for email: ${email}`);
+
+        // Process media URLs
+        const processedOrders = orders.map(order => {
+            if (order.items) {
+                order.items = order.items.map(item => {
+                    // If item already has media (from createOrder), use it
+                    if (item.media && Array.isArray(item.media) && item.media.length > 0) {
+                        // Process existing media URLs
+                        item.media = item.media.map(mediaItem => ({
+                            ...mediaItem,
+                            url: processMediaUrl(mediaItem.url)
+                        }));
+                    }
+                    // If populated product has media, ensure URLs are complete
+                    else if (item.productId && item.productId.media && Array.isArray(item.productId.media)) {
+                        item.productId.media = item.productId.media.map(mediaItem => ({
+                            ...mediaItem,
+                            url: processMediaUrl(mediaItem.url)
+                        }));
+                    }
+                    return item;
+                });
+            }
+            return order;
+        });
+
+        res.status(200).json({
+            success: true,
+            orders: processedOrders,
+            totalCount: processedOrders.length,
+            email: email
+        });
+
+    } catch (error) {
+        console.error("Error fetching orders by email:", error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch orders by email",
             error: error.message
         });
     }
 });
-
 // Get Orders by User ID (with product population and media URL processing)
 router.get('/orders/:userId', async (req, res) => {
     const { userId } = req.params;
