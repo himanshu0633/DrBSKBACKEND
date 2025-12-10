@@ -26,6 +26,208 @@ const processMediaUrl = (url) => {
     
     return `${baseWithoutTrailingSlash}/${cleanUrl}`;
 };
+
+
+// routes/orderRoutes.js में:
+
+router.get('/orders/email/:email', async (req, res) => {
+    const { email } = req.params;
+
+    if (!email) {
+        return res.status(400).json({
+            success: false,
+            message: "Email is required"
+        });
+    }
+
+    try {
+        // Case-insensitive search for email
+        const emailRegex = new RegExp(`^${email}$`, 'i');
+        
+        const orders = await Order.find({ 
+            $or: [
+                { email: emailRegex },
+                { userEmail: emailRegex }
+            ]
+        })
+        .populate({
+            path: 'items.productId',
+            model: 'Product',
+            select: 'name price media category description'
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        // Process media URLs
+        const processedOrders = orders.map(order => {
+            if (order.items) {
+                order.items = order.items.map(item => {
+                    if (item.media && Array.isArray(item.media) && item.media.length > 0) {
+                        item.media = item.media.map(mediaItem => ({
+                            ...mediaItem,
+                            url: processMediaUrl(mediaItem.url)
+                        }));
+                    } else if (item.productId && item.productId.media && Array.isArray(item.productId.media)) {
+                        item.productId.media = item.productId.media.map(mediaItem => ({
+                            ...mediaItem,
+                            url: processMediaUrl(mediaItem.url)
+                        }));
+                    }
+                    return item;
+                });
+            }
+            return order;
+        });
+
+        res.status(200).json({
+            success: true,
+            orders: processedOrders,
+            totalCount: processedOrders.length
+        });
+
+    } catch (error) {
+        console.error("Error fetching orders by email:", error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch orders by email",
+            error: error.message
+        });
+    }
+});
+
+
+// routes/orderRoutes.js में:
+
+router.post('/link-guest-orders', async (req, res) => {
+    const { email, userId } = req.body;
+
+    try {
+        // Find all guest orders with this email
+        const guestOrders = await Order.find({
+            $or: [
+                { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+                { userEmail: { $regex: new RegExp(`^${email}$`, 'i') } }
+            ],
+            userId: { $exists: false } // Only orders without userId
+        });
+
+        if (guestOrders.length === 0) {
+            return res.json({
+                success: true,
+                message: 'No guest orders found to link',
+                linkedCount: 0
+            });
+        }
+
+        // Update all guest orders with userId
+        const result = await Order.updateMany(
+            {
+                _id: { $in: guestOrders.map(order => order._id) }
+            },
+            {
+                $set: { 
+                    userId: userId,
+                    isGuest: false
+                }
+            }
+        );
+
+        res.json({
+            success: true,
+            message: `Linked ${result.modifiedCount} guest orders to your account`,
+            linkedCount: result.modifiedCount
+        });
+
+    } catch (error) {
+        console.error('Error linking guest orders:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to link guest orders'
+        });
+    }
+});
+
+
+
+
+// Guest orders को logged-in user से link करने का API
+// ✅ Guest orders को logged-in user से link करने का API
+router.post('/orders/link-guest-orders', async (req, res) => {
+    const { email, userId } = req.body;
+
+    console.log("=== LINKING GUEST ORDERS ===");
+    console.log("Email:", email);
+    console.log("User ID:", userId);
+
+    if (!email || !userId) {
+        return res.status(400).json({
+            success: false,
+            message: "Email and userId are required"
+        });
+    }
+
+    try {
+        // Step 1: Find all guest orders with this email but without userId or with guest userId
+        const guestOrders = await Order.find({
+            $or: [
+                { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+                { userEmail: { $regex: new RegExp(`^${email}$`, 'i') } }
+            ],
+            $or: [
+                { userId: { $exists: false } },
+                { userId: /^guest_/ },
+                { isGuest: true }
+            ]
+        });
+
+        console.log(`Found ${guestOrders.length} guest orders to link`);
+
+        if (guestOrders.length === 0) {
+            return res.json({
+                success: true,
+                message: 'No guest orders found to link',
+                linkedCount: 0
+            });
+        }
+
+        // Step 2: Update all guest orders with current userId
+        const result = await Order.updateMany(
+            {
+                _id: { $in: guestOrders.map(order => order._id) }
+            },
+            {
+                $set: { 
+                    userId: userId,
+                    isGuest: false
+                }
+            }
+        );
+
+        console.log(`Linked ${result.modifiedCount} guest orders`);
+
+        res.json({
+            success: true,
+            message: `Linked ${result.modifiedCount} guest orders to your account`,
+            linkedCount: result.modifiedCount,
+            orders: guestOrders.map(order => ({
+                orderId: order._id,
+                createdAt: order.createdAt,
+                totalAmount: order.totalAmount
+            }))
+        });
+
+    } catch (error) {
+        console.error('Error linking guest orders:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to link guest orders',
+            error: error.message
+        });
+    }
+});
+
+
+
 // Create Order
 router.post('/createPaymentOrder', async (req, res) => {
     const { userId, items, address, phone, totalAmount, email } = req.body;

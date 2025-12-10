@@ -7,7 +7,7 @@ const fs = require("fs");
 const nodemailer = require("nodemailer");
 const Admin = require("../models/admin");
 const WholesalePartner = require("../models/wholeSale");
-
+const Order = require("../models/order");
 require("dotenv").config();
 
 
@@ -18,138 +18,7 @@ const findUser = async (email) => {
 };
 
 
-// const DEFAULT_PASSWORD = "Admin@123";
 
-// const transporter = nodemailer.createTransport({
-//   service: "gmail",
-//   auth: {
-//     user: process.env.EMAIL_USER,
-//     pass: process.env.EMAIL_PASSWORD,
-//   },
-// });
-
-
-// const forgotPassword = async (req, res) => {
-//   try {
-//     const { email } = req.body;
-
-//     const admin = await Admin.findUser({ email });
-//     if (!admin) {
-//       return res.status(404).json({ message: "Email not found" });
-//     }
-
-//     // Generate OTP
-//     const otp = Math.floor(100000 + Math.random() * 900000); // 6-digit OTP
-//     const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes from now
-
-//     // Save OTP and expiry to the database
-//     admin.otp = otp;
-//     admin.otpExpiry = otpExpiry;
-//     await admin.save();
-
-//     // Send OTP via email
-//     const mailOptions = {
-//       from: process.env.EMAIL_USER,
-//       to: email,
-//       subject: "Password Reset OTP",
-//       text: `Your OTP for resetting your password is ${otp}. This OTP will expire in 10 minutes.`,
-//     };
-
-//     await transporter.sendMail(mailOptions);
-
-//     logger.info(`OTP sent to ${email}`);
-//     res.status(200).json({ message: "OTP sent to your email" });
-//   } catch (error) {
-//     logger.error("Error during forgot password:", error);
-//     res.status(500).json({ message: "Internal Server Error" });
-//   }
-// };
-
-// const verifyOTP = async (req, res) => {
-//   try {
-//     const { email, otp } = req.body;
-
-//     const result = await findUser(email);
-//     if (!result) {
-//       return res.status(404).json({ message: "Email not found" });
-//     }
-
-//     const { type, user } = result;
-
-//     if (!user.otp || !user.otpExpiry) {
-//       return res.status(400).json({ message: "No OTP found for this email" });
-//     }
-
-//     if (Date.now() > user.otpExpiry) {
-//       return res.status(400).json({ message: "OTP has expired" });
-//     }
-
-//     if (parseInt(otp, 10) !== user.otp) {
-//       return res.status(400).json({ message: "Invalid OTP" });
-//     }
-
-//     // Clear OTP and expiry after successful verification
-//     user.otp = null;
-//     user.otpExpiry = null;
-//     await user.save();
-
-//     logger.info("OTP verified successfully");
-//     res.status(200).json({ message: "OTP verified successfully" });
-//   } catch (error) {
-//     logger.error("Error during OTP verification:", error);
-//     res.status(500).json({ message: "Internal Server Error" });
-//   }
-// };
-
-// const updatePassword = async (req, res) => {
-//   try {
-//     const { email, oldPassword, newPassword } = req.body;
-
-//     if (!email || !newPassword) {
-//       return res
-//         .status(400)
-//         .json({ message: "Email and new password are required" });
-//     }
-
-//     const result = await findUser(email);
-//     if (!result) {
-//       return res.status(404).json({ message: "User not found" });
-//     }
-
-//     const { type, user } = result;
-
-//     if (oldPassword) {
-//       const isOldPasswordValid = await bcrypt.compare(
-//         oldPassword,
-//         user.password
-//       );
-//       if (!isOldPasswordValid) {
-//         return res.status(400).json({ message: "Old password is incorrect" });
-//       }
-//     }
-
-//     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
-//     user.password = hashedNewPassword;
-//     await user.save();
-
-//     const mailOptions = {
-//       from: process.env.EMAIL_USER,
-//       to: email,
-//       subject: "Password Updated Successfully",
-//       text: `Your password has been successfully updated.`,
-//     };
-
-//     await transporter.sendMail(mailOptions);
-
-//     logger.info("Password updated successfully and email notification sent");
-//     res
-//       .status(200)
-//       .json({ message: "Password updated successfully and email sent" });
-//   } catch (error) {
-//     logger.error("Error updating password:", error);
-//     res.status(500).json({ message: "Internal Server Error" });
-//   }
-// };
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -179,6 +48,10 @@ const handleFileSizeError = (err, req, res, next) => {
 
 
 
+// Admin model import करें
+
+
+// adminLogin function update करें:
 const adminLogin = async (req, res) => {
   try {
     const { email, password, location, ipAddress, phone } = req.body;
@@ -211,8 +84,38 @@ const adminLogin = async (req, res) => {
     const geoLocation = location || "Unknown location";
     const userIp = ipAddress || "Unknown IP";
 
-    // Update login metadata (only for Admins for now)
+    // ✅ CRITICAL: Link guest orders to this user
+    let linkedOrdersCount = 0;
     if (type === 'admin') {
+      // Find all guest orders with this email
+      const guestOrders = await Order.find({
+        $or: [
+          { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+          { userEmail: { $regex: new RegExp(`^${email}$`, 'i') } }
+        ],
+        $or: [
+          { userId: { $exists: false } },
+          { userId: null }
+        ]
+      });
+
+      if (guestOrders.length > 0) {
+        // Update all guest orders with userId
+        const result = await Order.updateMany(
+          {
+            _id: { $in: guestOrders.map(order => order._id) }
+          },
+          {
+            $set: { 
+              userId: user._id,
+              isGuest: false
+            }
+          }
+        );
+        linkedOrdersCount = result.modifiedCount;
+      }
+      
+      // Update login metadata
       await Admin.updateOne(
         { _id: user._id },
         { ipAddress: userIp, timeStamp: timestamp, location: geoLocation, phone },
@@ -220,9 +123,10 @@ const adminLogin = async (req, res) => {
       );
     }
 
-    logger.info(`${type} logged in successfully`);
+    logger.info(`${type} logged in successfully${linkedOrdersCount > 0 ? ` - ${linkedOrdersCount} guest orders linked` : ''}`);
 
-    res.json({
+    // Response prepare करें
+    const responseData = {
       status: "success",
       message: "Login successful",
       token,
@@ -233,8 +137,17 @@ const adminLogin = async (req, res) => {
         location: geoLocation,
         type,
         phone: user.phone,
-      },
-    });
+      }
+    };
+
+    // ✅ Add guest orders linking info to response
+    if (linkedOrdersCount > 0) {
+      responseData.guestOrdersLinked = linkedOrdersCount;
+      responseData.message = `Login successful! ${linkedOrdersCount} previous guest orders linked to your account.`;
+    }
+
+    res.json(responseData);
+    
   } catch (error) {
     logger.error("Error during login:", error);
     res.status(500).json({ message: "Internal Server Error" });
@@ -244,7 +157,6 @@ const adminLogin = async (req, res) => {
 
 const createAdmin = async (req, res) => {
   try {
-    // const { email, name, phone, address, location, role = "User", password } = req.body;
     let { email, name, phone, address, location, role = "User", password } = req.body;
     if (typeof address === "string") {
       address = [address];
@@ -265,6 +177,7 @@ const createAdmin = async (req, res) => {
 
     const timeStamp = new Date().toISOString();
 
+    // Create new admin
     const admin = await Admin.create({
       email,
       password: hashedPassword,
@@ -277,8 +190,58 @@ const createAdmin = async (req, res) => {
       timeStamp,
     });
 
+    // ✅ CRITICAL: Link guest orders to new user account
+    let linkedOrdersCount = 0;
+    const guestOrders = await Order.find({
+      $or: [
+        { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+        { userEmail: { $regex: new RegExp(`^${email}$`, 'i') } }
+      ],
+      $or: [
+        { userId: { $exists: false } },
+        { userId: null }
+      ]
+    });
+
+    if (guestOrders.length > 0) {
+      const result = await Order.updateMany(
+        {
+          _id: { $in: guestOrders.map(order => order._id) }
+        },
+        {
+          $set: { 
+            userId: admin._id,
+            isGuest: false
+          }
+        }
+      );
+      linkedOrdersCount = result.modifiedCount;
+    }
+
+    // Create token
+    const token = jwt.sign(
+      { id: admin._id, email: admin.email, type: 'admin' },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
     logger.info("Admin created successfully");
-    res.status(201).json({ message: "Admin created successfully", admin });
+
+    // Response prepare करें
+    const responseData = {
+      message: "Admin created successfully",
+      token,
+      data: admin
+    };
+
+    // ✅ Add guest orders linking info
+    if (linkedOrdersCount > 0) {
+      responseData.guestOrdersLinked = linkedOrdersCount;
+      responseData.message = `Account created! ${linkedOrdersCount} previous guest orders linked to your account.`;
+    }
+
+    res.status(201).json(responseData);
+    
   } catch (error) {
     logger.error("Error creating admin:", error);
     res.status(500).json({ message: "Internal Server Error" });
