@@ -31,8 +31,8 @@ console.log("✅ Razorpay credentials loaded:", {
 
 // Initialize Razorpay instance with environment variables only
 const razorpayInstance = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
+  key_id: "rzp_live_RqbjPU4fGaUKDd",
+  key_secret: "5kMrDkYOg2gV8HhdZY70EjBh",
 });
 
 // Email transporter setup
@@ -284,7 +284,7 @@ const processMediaUrl = (url) => {
   }
   
   const cleanUrl = url.startsWith('/') ? url.substring(1) : url;
-  const baseUrl = process.env.BASE_URL || 'http://localhost:5000';
+  const baseUrl = "https://drbskhealthcare.com";
   const baseWithoutTrailingSlash = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
   
   return `${baseWithoutTrailingSlash}/${cleanUrl}`;
@@ -632,7 +632,7 @@ router.post('/verifyPayment', async (req, res) => {
 
     // Verify payment signature
     const generatedSignature = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .createHmac('sha256', '5kMrDkYOg2gV8HhdZY70EjBh')
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
@@ -679,7 +679,7 @@ router.post('/verifyPayment', async (req, res) => {
       });
     }
 
-    console.log("✅ Payment captured successfully");
+    console.log("✅ Payment paid successfully");
 
     // Prepare user details
     let userEmail = email;
