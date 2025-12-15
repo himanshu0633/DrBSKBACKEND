@@ -31,8 +31,8 @@ console.log("✅ Razorpay credentials loaded:", {
 
 // Initialize Razorpay instance with environment variables only
 const razorpayInstance = new Razorpay({
-  key_id: "rzp_live_RqbjPU4fGaUKDd",
-  key_secret: "5kMrDkYOg2gV8HhdZY70EjBh",
+  key_id: "rzp_test_RpQ1JwSJEy6yAw",
+  key_secret: "1XsoSE1HMxnMUbIoC3V3An6n",
 });
 
 // Email transporter setup
@@ -632,7 +632,7 @@ router.post('/verifyPayment', async (req, res) => {
 
     // Verify payment signature
     const generatedSignature = crypto
-      .createHmac('sha256', '5kMrDkYOg2gV8HhdZY70EjBh')
+      .createHmac('sha256', '1XsoSE1HMxnMUbIoC3V3An6n')
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
