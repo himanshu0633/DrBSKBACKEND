@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const adminSchema = mongoose.Schema(
   {
     email: { type: String, unique: true, required: true },
-    password: { type: String, required: true },
+    password: { type: String },
     role: { type: String, default: "User" }, // Default role set here
     name: { type: String },
     image: { type: String },
@@ -12,6 +12,8 @@ const adminSchema = mongoose.Schema(
     location: { type: String },
     timeStamp: { type: String },
     deleted_at: { type: Date, default: null },
+    lastLogin: { type: Date },
+    loginMethod: { type: String, enum: ['otp', 'password', 'both'], default: 'otp' }
   },
   { timestamps: true }
 );

@@ -25,14 +25,14 @@ if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
 }
 
 console.log("✅ Razorpay credentials loaded:", {
-  keyId: process.env.RAZORPAY_KEY_ID ? `${process.env.RAZORPAY_KEY_ID.substring(0, 10)}...` : "missing",
-  keySecret: process.env.RAZORPAY_KEY_SECRET ? "***SECRET***" : "missing"
+  keyId: "rzp_live_RsAhVxy2ldrBIl" ? `${process.env.RAZORPAY_KEY_ID.substring(0, 10)}...` : "missing",
+  keySecret:"wSS6yEWqeQWqJjsYZH6VhnPZ"? "***SECRET***" : "missing"
 });
 
 // Initialize Razorpay instance with environment variables only
 const razorpayInstance = new Razorpay({
-  key_id: "rzp_test_RpQ1JwSJEy6yAw",
-  key_secret: "1XsoSE1HMxnMUbIoC3V3An6n",
+  key_id: "rzp_live_RsAhVxy2ldrBIl",
+  key_secret: "wSS6yEWqeQWqJjsYZH6VhnPZ",
 });
 
 // Email transporter setup
@@ -632,7 +632,7 @@ router.post('/verifyPayment', async (req, res) => {
 
     // Verify payment signature
     const generatedSignature = crypto
-      .createHmac('sha256', '1XsoSE1HMxnMUbIoC3V3An6n')
+      .createHmac('sha256', 'wSS6yEWqeQWqJjsYZH6VhnPZ')
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
