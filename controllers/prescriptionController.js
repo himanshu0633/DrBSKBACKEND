@@ -23,8 +23,10 @@ exports.createPrescription = async (req, res) => {
 // Get all prescriptions (excluding soft deleted)
 exports.getPrescriptions = async (req, res) => {
   try {
-    const prescriptions = await Prescription.find({ deleted_at: null });
-    logger.info("Fetched prescriptions");
+    const prescriptions = await Prescription.find({ deleted_at: null })
+      .populate("userId", "name email"); // 👈 YAHI LAGANA HAI
+
+    logger.info("Fetched prescriptions with user data");
     res.status(200).json(prescriptions);
   } catch (error) {
     logger.error("Error fetching prescriptions:", error);

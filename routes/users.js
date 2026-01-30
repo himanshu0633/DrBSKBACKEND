@@ -64,3 +64,15 @@ router.delete("/deleteBanner/:id", bannerController.deleteBanner);
 router.get('/images', productController.getAllProductImages);
 
 module.exports = router;
+
+
+router.get('/readUser/:id', async (req, res) => {
+  try {
+    const User = require('../models/admin'); // 👈 tumhara "User" actually Admin model hai
+    const user = await User.findById(req.params.id).select('-password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});

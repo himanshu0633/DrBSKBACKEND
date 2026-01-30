@@ -5,7 +5,7 @@ const prescriptionSchema = mongoose.Schema(
      userId: {
         type: mongoose.Schema.Types.ObjectId,
         required: true,
-        ref: 'User',
+        ref: 'Admin',
       },
     image: { type: String },
     deleted_at : { type: Date, default: null },
