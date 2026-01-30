@@ -7,6 +7,7 @@ const usersRoutes = require("./routes/users");
 const orderRoutes = require("./routes/order");
 const nodemailer = require('nodemailer');
 const razorpayWebhookRouter = require('./routes/razorpayWebhook');
+const facebookRateLimiter = require('./middlewares/facebookRateLimiter');
 
 console.log('Admin routes loaded:', typeof adminRoutes);
 
@@ -17,6 +18,8 @@ const fs = require("fs");
 const path = require('path');
 const { logger, logFilePath } = require("./utils/logger");
 
+// Facebook SDK
+const bizSdk = require('facebook-nodejs-business-sdk');
 
 // in case uploads folder is not created
 const uploadDir = path.join(__dirname, 'uploads', 'products');
@@ -30,43 +33,198 @@ dotenv.config();
 connectDB();
 
 const app = express();
-// app.use(express.json());
 app.use(express.json({ limit: '10mb' }))
-
-// const allowedOrigins = [
-//   'https://drbskhealthcare.com',
-//   'http://localhost:3000',
-//   'https://fvvcbrpm-4000.inc1.devtunnels.ms',
-// ];
-
-// app.set('trust proxy', true);
-
-// // Apply CORS middleware
-// app.use(cors({
-//   origin: (origin, cb) => {
-//     if (!origin) return cb(null, true);
-//     if (allowedOrigins.includes(origin)) {
-//       return cb(null, true);
-//     } else {
-//       return cb(new Error('CORS policy: Origin not allowed'), false);
-//     }
-//   },
-//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-//   allowedHeaders: ['Content-Type', 'Authorization'],
-//   credentials: true,
-// }));
-
 app.use(cors());
 app.set("trust proxy", true);
 app.use('/uploads', express.static('uploads'));
 
+// Facebook Pixel Configuration
+const FACEBOOK_ACCESS_TOKEN = process.env.FACEBOOK_ACCESS_TOKEN || 'EAALZCy4qRZChgBQnIEuqLYN7UDEoRRAeAJoN59rycRA4K0Ga6eSf8EY2vdF2P8e6qTUm3aCdhIZBshxuM2qbicl9yCXHcCoBbh9jLINNaF3JaRwYYLIWQkzoVU147djADEiB9wZAyZCBZCdoOQgfZBJKWFx7mfksodmIE1cxlmWDUlgf8QzZBpijjcuPlzB2pEne1wZDZD';
+const FACEBOOK_PIXEL_ID = process.env.FACEBOOK_PIXEL_ID || '1131280045595284';
+
+// ==================== FACEBOOK CONVERSIONS API ====================
+
+// Facebook Events API Endpoint
+app.post('/api/facebook-events', facebookRateLimiter, async (req, res) => {
+  try {
+    console.log('📨 Received Facebook Event:', req.body.eventName);
+
+    const {
+      eventName,
+      data,
+      fbp,
+      fbc,
+      clientUserAgent,
+    } = req.body;
+
+    // Get client IP address
+    const clientIp = req.headers['x-forwarded-for'] || 
+                     req.headers['x-real-ip'] || 
+                     req.connection.remoteAddress || 
+                     req.ip;
+
+    // Create UserData object
+    const userData = new bizSdk.UserData()
+      .setClientIpAddress(clientIp)
+      .setClientUserAgent(clientUserAgent || req.headers['user-agent']);
+
+    // Add Facebook cookies if available
+    if (fbp) userData.setFbp(fbp);
+    if (fbc) userData.setFbc(fbc);
+
+    // Add email if available (hashed)
+    if (data.email) {
+      const crypto = require('crypto');
+      const hashedEmail = crypto
+        .createHash('sha256')
+        .update(data.email.toLowerCase().trim())
+        .digest('hex');
+      userData.setEmails([hashedEmail]);
+    }
+
+    // Add phone if available (hashed)
+    if (data.phone) {
+      const crypto = require('crypto');
+      const hashedPhone = crypto
+        .createHash('sha256')
+        .update(data.phone.replace(/\D/g, ''))
+        .digest('hex');
+      userData.setPhones([hashedPhone]);
+    }
+
+    // Create CustomData object
+    const customData = new bizSdk.CustomData()
+      .setCurrency(data.currency || 'INR')
+      .setValue(data.value || 0);
+
+    // Add content details
+    if (data.id) customData.setContentIds([data.id]);
+    if (data.content_ids) customData.setContentIds(data.content_ids);
+    if (data.name) customData.setContentName(data.name);
+    if (data.category) customData.setContentType(data.category);
+    if (data.num_items) customData.setNumItems(data.num_items);
+    if (data.quantity) customData.setNumItems(data.quantity);
+
+    // Create ServerEvent object
+    const serverEvent = new bizSdk.ServerEvent()
+      .setEventName(eventName)
+      .setEventTime(data.eventTime || Math.floor(Date.now() / 1000))
+      .setUserData(userData)
+      .setCustomData(customData)
+      .setActionSource('website');
+
+    // Set event source URL
+    if (data.eventSourceUrl) {
+      serverEvent.setEventSourceUrl(data.eventSourceUrl);
+    } else if (req.headers.referer) {
+      serverEvent.setEventSourceUrl(req.headers.referer);
+    } else {
+      serverEvent.setEventSourceUrl('https://drbskhealthcare.com');
+    }
+
+    // Create EventRequest
+    const eventsData = [serverEvent];
+    const eventRequest = new bizSdk.EventRequest(FACEBOOK_ACCESS_TOKEN, FACEBOOK_PIXEL_ID)
+      .setEvents(eventsData);
+
+    // Execute the request
+    const response = await eventRequest.execute();
+
+    console.log(`✅ Facebook ${eventName} event sent successfully`);
+    
+    // Log for debugging
+    logger.info('Facebook Event Sent', {
+      eventName,
+      contentName: data.name,
+      value: data.value,
+      currency: data.currency,
+      userAgent: clientUserAgent?.substring(0, 50),
+      timestamp: new Date().toISOString()
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Facebook ${eventName} event sent successfully`,
+      eventId: response?.event_id || null
+    });
+
+  } catch (error) {
+    console.error('❌ Facebook API Error:', error);
+    
+    logger.error('Facebook API Error', {
+      message: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
+
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to send Facebook event'
+    });
+  }
+});
+
+// Facebook Health Check
+app.get('/api/facebook-events/health', (req, res) => {
+  const healthStatus = {
+    success: true,
+    message: 'Facebook Conversions API is healthy',
+    timestamp: new Date().toISOString(),
+    facebookPixel: FACEBOOK_PIXEL_ID ? 'Configured' : 'Not configured',
+    accessToken: FACEBOOK_ACCESS_TOKEN ? 'Configured' : 'Not configured'
+  };
+  
+  console.log('🔍 Facebook API Health Check:', healthStatus);
+  res.status(200).json(healthStatus);
+});
+
+// Test Facebook Event Endpoint
+app.post('/api/test-facebook-event', async (req, res) => {
+  try {
+    const testEvent = {
+      eventName: 'PageView',
+      data: {
+        id: 'test_home_page',
+        name: 'Test Home Page',
+        value: 0,
+        currency: 'INR',
+        category: 'Test',
+        eventTime: Math.floor(Date.now() / 1000),
+        eventSourceUrl: 'https://drbskhealthcare.com/test'
+      },
+      fbp: 'fb.1.1234567890.1234567890',
+      fbc: 'fb.1.1234567890.1234567890',
+      clientUserAgent: 'Mozilla/5.0 Test Browser'
+    };
+
+    const response = await fetch(`http://localhost:${process.env.PORT || 4000}/api/facebook-events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(testEvent)
+    });
+
+    const result = await response.json();
+    
+    res.json({
+      message: 'Test event triggered',
+      facebookResponse: result,
+      testEvent
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Test failed',
+      message: error.message
+    });
+  }
+});
+
+// ==================== EXISTING ROUTES ====================
 
 // API routes
 app.use("/admin", adminRoutes);
 app.use("/user", usersRoutes);
 app.use('/api', orderRoutes);
 app.use('/webhook', razorpayWebhookRouter);
-
 
 // --- New OTP Email Verification Routes ---
 
@@ -100,10 +258,6 @@ app.post('/api/send-otp', (req, res) => {
   };
 
   transporter.sendMail(mailOptions, (error, info) => {
-    // if (error) {
-    //   logger.error('Failed to send OTP email', { error: error.message });
-    //   return res.status(500).json({ message: 'Failed to send OTP' });
-    // }
     if (error) {
       logger.error('Failed to send OTP email', { error: error.message, stack: error.stack });
       return res.status(500).json({ message: error.message });
@@ -113,35 +267,7 @@ app.post('/api/send-otp', (req, res) => {
   });
 });
 
-// Endpoint to verify OTP
-// option 1: without phone
-// app.post('/api/verify-otp', (req, res) => {
-//   const { email, otp } = req.body;
-//   if (!email || !otp) {
-//     return res.status(400).json({ message: 'Email and OTP are required' });
-//   }
-
-//   const record = otpStore[email];
-//   if (!record) {
-//     return res.status(400).json({ message: 'OTP not found or expired, please request again' });
-//   }
-
-//   if (Date.now() > record.expires) {
-//     delete otpStore[email];
-//     return res.status(400).json({ message: 'OTP expired, please request again' });
-//   }
-
-//   if (record.otp !== otp) {
-//     return res.status(400).json({ message: 'Invalid OTP' });
-//   }
-
-//   // Successful verification
-//   delete otpStore[email];
-//   res.json({ message: 'OTP verified successfully' });
-// });
-
-
-// option 2: with phone and save user and otp verification
+// Endpoint to verify OTP with phone and save user
 app.post('/api/verify-otp', async (req, res) => {
   const { email, otp, name, phone, password, address } = req.body;
 
@@ -192,6 +318,38 @@ app.post('/api/verify-otp', async (req, res) => {
     });
 
     logger.info('User created successfully after OTP verification', { email });
+    
+    // Send Facebook registration event
+    try {
+      const facebookEventData = {
+        eventName: 'CompleteRegistration',
+        data: {
+          id: user._id.toString(),
+          name: user.name,
+          email: user.email,
+          value: 0,
+          currency: 'INR',
+          category: 'User Registration',
+          eventTime: Math.floor(Date.now() / 1000),
+          eventSourceUrl: req.headers.referer || 'https://drbskhealthcare.com/register'
+        },
+        clientUserAgent: req.headers['user-agent']
+      };
+
+      // Send to Facebook API
+      const facebookRes = await fetch(`http://localhost:${process.env.PORT || 4000}/api/facebook-events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(facebookEventData)
+      });
+      
+      if (facebookRes.ok) {
+        console.log('✅ Facebook registration event sent');
+      }
+    } catch (fbError) {
+      console.error('Facebook event error:', fbError);
+    }
+    
     res.json({
       message: 'OTP verified and user created successfully',
       admin: {
@@ -208,9 +366,6 @@ app.post('/api/verify-otp', async (req, res) => {
   }
 });
 
-// debug log to check mongo is working or not:
-// console.log('MongoDB URI:', process.env.MONGO_URI || 'Not set');
-
 // Logs API endpoint
 app.get("/api/logs", (req, res) => {
   fs.readFile(logFilePath, "utf8", (err, data) => {
@@ -226,9 +381,55 @@ app.get("/api/logs", (req, res) => {
   });
 });
 
-
-app.get('/', (req, res) => {
-  res.send('✅ Dr BSK Healthcare backend is running with HTTPS!');
+// Facebook Logs endpoint
+app.get("/api/facebook-logs", (req, res) => {
+  const facebookLogsPath = path.join(__dirname, 'logs', 'facebook-events.log');
+  
+  if (!fs.existsSync(facebookLogsPath)) {
+    return res.json([]);
+  }
+  
+  fs.readFile(facebookLogsPath, "utf8", (err, data) => {
+    if (err) {
+      logger.error("Failed to read Facebook log file", { error: err.message });
+      return res.status(500).json({ error: "Unable to read Facebook log file" });
+    }
+    const logs = data
+      .split("\n")
+      .filter(line => line.trim() !== "")
+      .map(line => JSON.parse(line));
+    res.json(logs);
+  });
 });
-module.exports = app;
 
+// Root endpoint
+app.get('/', (req, res) => {
+  const serverInfo = {
+    name: 'Dr BSK Healthcare Backend',
+    status: '✅ Running with HTTPS!',
+    facebookApi: '✅ Facebook Conversions API Active',
+    endpoints: {
+      facebookEvents: '/api/facebook-events',
+      facebookHealth: '/api/facebook-events/health',
+      testEvent: '/api/test-facebook-event',
+      otpSend: '/api/send-otp',
+      otpVerify: '/api/verify-otp',
+      logs: '/api/logs',
+      facebookLogs: '/api/facebook-logs'
+    },
+    timestamp: new Date().toISOString()
+  };
+  res.json(serverInfo);
+});
+
+// Facebook Config endpoint
+app.get('/api/facebook-config', (req, res) => {
+  res.json({
+    pixelId: FACEBOOK_PIXEL_ID,
+    hasAccessToken: !!FACEBOOK_ACCESS_TOKEN,
+    status: 'Configured',
+    timestamp: new Date().toISOString()
+  });
+});
+
+module.exports = app;
