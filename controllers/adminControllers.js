@@ -7,9 +7,26 @@ const fs = require("fs");
 const nodemailer = require("nodemailer");
 const Admin = require("../models/admin");
 const WholesalePartner = require("../models/wholeSale");
-
+const crypto = require('crypto');
+const Order = require("../models/order");
+const mongoose = require('mongoose');
 require("dotenv").config();
 
+// OTP Model (यह अलग file में होना चाहिए, लेकिन temporary यहाँ define कर रहे हैं)
+const otpSchema = new mongoose.Schema({
+  email: { type: String, required: false },
+  phone: { type: String, required: false },
+  otp: { type: String, required: true },
+  expiresAt: { type: Date, required: true },
+  verified: { type: Boolean, default: false },
+  type: { type: String, enum: ['email', 'phone'], required: true }
+}, { timestamps: true });
+
+// Add indexes
+otpSchema.index({ email: 1, phone: 1 });
+otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+const OTP = mongoose.models.OTP || mongoose.model('OTP', otpSchema);
 
 const findUser = async (email) => {
   const admin = await Admin.findOne({ email });
@@ -17,140 +34,277 @@ const findUser = async (email) => {
   return null;
 };
 
+// Send OTP function
+const sendOtp = async (req, res) => {
+  try {
+    const { email, phone } = req.body;
+    
+    if (!email && !phone) {
+      return res.status(400).json({ message: 'Email or phone is required' });
+    }
+    
+    // Generate 6-digit OTP
+    const otp = crypto.randomInt(100000, 999999).toString();
+    
+    // Set expiry to 10 minutes
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    
+    let otpRecord;
+    
+    if (email) {
+      // Check if user exists
+      let user = await Admin.findOne({ email });
+      if (!user) {
+        user = await WholesalePartner.findOne({ billingEmail: email });
+        if (!user) {
+          return res.status(404).json({ message: 'Email not registered' });
+        }
+      }
+      
+      // Delete previous OTPs for this email
+      await OTP.deleteMany({ email });
+      
+      // Create new OTP record
+      otpRecord = await OTP.create({
+        email,
+        otp,
+        expiresAt,
+        type: 'email'
+      });
+      
+      // Send OTP via email
+      await sendEmailOtp(email, otp);
+      
+    } else if (phone) {
+      // Check if user exists with this phone
+      let user = await Admin.findOne({ phone });
+      if (!user) {
+        user = await WholesalePartner.findOne({ phone: phone });
+        if (!user) {
+          return res.status(404).json({ message: 'Phone number not registered' });
+        }
+      }
+      
+      // Delete previous OTPs for this phone
+      await OTP.deleteMany({ phone });
+      
+      // Create new OTP record
+      otpRecord = await OTP.create({
+        phone,
+        otp,
+        expiresAt,
+        type: 'phone'
+      });
+      
+      // Send OTP via SMS (you'll need to implement this)
+      await sendSmsOtp(phone, otp);
+    }
+    
+    res.status(200).json({ 
+      success: true, 
+      message: 'OTP sent successfully',
+      // In development, you might want to return OTP for testing
+      otp: process.env.NODE_ENV === 'development' ? otp : undefined
+    });
+    
+  } catch (error) {
+    logger.error("Error sending OTP:", error);
+    res.status(500).json({ message: "Failed to send OTP" });
+  }
+};
 
-// const DEFAULT_PASSWORD = "Admin@123";
+// Email sending function
+const sendEmailOtp = async (email, otp) => {
+  try {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: process.env.SMTP_PORT || 587,
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
+      }
+    });
+    
+    const mailOptions = {
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: email,
+      subject: 'Your OTP for Login ',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #333;">Login OTP</h2>
+          <p>Your OTP for login is:</p>
+          <div style="background-color: #f4f4f4; padding: 10px; border-radius: 5px; font-size: 24px; font-weight: bold; letter-spacing: 5px; text-align: center;">
+            ${otp}
+          </div>
+          <p>This OTP is valid for 10 minutes.</p>
+          <p>If you didn't request this OTP, please ignore this email.</p>
+          <hr>
+          <p style="color: #666; font-size: 12px;">This is an automated message, please do not reply.</p>
+        </div>
+      `
+    };
+    
+    await transporter.sendMail(mailOptions);
+    logger.info(`OTP email sent to ${email}`);
+    
+  } catch (error) {
+    logger.error("Error sending email OTP:", error);
+    throw error;
+  }
+};
 
-// const transporter = nodemailer.createTransport({
-//   service: "gmail",
-//   auth: {
-//     user: process.env.EMAIL_USER,
-//     pass: process.env.EMAIL_PASSWORD,
-//   },
-// });
+// SMS sending function (placeholder)
+const sendSmsOtp = async (phone, otp) => {
+  // Implement SMS sending logic here
+  logger.info(`OTP for phone ${phone}: ${otp}`);
+  return Promise.resolve();
+};
 
+const loginWithOtp = async (req, res) => {
+  try {
+    const { email, phone, otp } = req.body;
+    
+    if ((!email && !phone) || !otp) {
+      return res.status(400).json({ 
+        message: 'Email/phone and OTP are required' 
+      });
+    }
+    
+    // Find OTP record
+    let otpRecord;
+    if (email) {
+      otpRecord = await OTP.findOne({ 
+        email, 
+        otp,
+        verified: false 
+      });
+    } else {
+      otpRecord = await OTP.findOne({ 
+        phone, 
+        otp,
+        verified: false 
+      });
+    }
+    
+    if (!otpRecord) {
+      return res.status(400).json({ message: 'Invalid OTP' });
+    }
+    
+    // Check if OTP is expired
+    if (new Date() > otpRecord.expiresAt) {
+      return res.status(400).json({ message: 'OTP has expired' });
+    }
+    
+    // Mark OTP as verified
+    otpRecord.verified = true;
+    await otpRecord.save();
+    
+    // Find user
+    let user, type;
+    if (email) {
+      user = await Admin.findOne({ email });
+      type = 'admin';
+      
+      if (!user) {
+        user = await WholesalePartner.findOne({ billingEmail: email });
+        type = 'wholesalePartner';
+      }
+    } else {
+      user = await Admin.findOne({ phone });
+      type = 'admin';
+      
+      if (!user) {
+        user = await WholesalePartner.findOne({ phone });
+        type = 'wholesalePartner';
+      }
+    }
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        id: user._id, 
+        email: user.email || user.billingEmail, 
+        phone: user.phone,
+        type 
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+    
+    const timestamp = new Date().toISOString();
+    
+    // Link guest orders (for email login only)
+    let linkedOrdersCount = 0;
+    if (email && type === 'admin') {
+      const guestOrders = await Order.find({
+        $or: [
+          { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+          { userEmail: { $regex: new RegExp(`^${email}$`, 'i') } }
+        ],
+        $or: [
+          { userId: { $exists: false } },
+          { userId: null }
+        ]
+      });
 
-// const forgotPassword = async (req, res) => {
-//   try {
-//     const { email } = req.body;
+      if (guestOrders.length > 0) {
+        const result = await Order.updateMany(
+          {
+            _id: { $in: guestOrders.map(order => order._id) }
+          },
+          {
+            $set: { 
+              userId: user._id,
+              isGuest: false
+            }
+          }
+        );
+        linkedOrdersCount = result.modifiedCount;
+      }
+      
+      // Update login metadata
+      await Admin.updateOne(
+        { _id: user._id },
+        { 
+          timeStamp: timestamp,
+          lastLogin: new Date()
+        },
+        { new: true }
+      );
+    }
+    
+    logger.info(`${type} logged in with OTP successfully${linkedOrdersCount > 0 ? ` - ${linkedOrdersCount} guest orders linked` : ''}`);
+    
+    const responseData = {
+      status: "success",
+      message: "Login successful",
+      token,
+      data: {
+        ...user._doc,
+        timeStamp: timestamp,
+        type
+      }
+    };
+    
+    if (linkedOrdersCount > 0) {
+      responseData.guestOrdersLinked = linkedOrdersCount;
+      responseData.message = `Login successful! ${linkedOrdersCount} previous guest orders linked to your account.`;
+    }
+    
+    res.json(responseData);
+    
+  } catch (error) {
+    logger.error("Error during OTP login:", error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+};
 
-//     const admin = await Admin.findUser({ email });
-//     if (!admin) {
-//       return res.status(404).json({ message: "Email not found" });
-//     }
-
-//     // Generate OTP
-//     const otp = Math.floor(100000 + Math.random() * 900000); // 6-digit OTP
-//     const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes from now
-
-//     // Save OTP and expiry to the database
-//     admin.otp = otp;
-//     admin.otpExpiry = otpExpiry;
-//     await admin.save();
-
-//     // Send OTP via email
-//     const mailOptions = {
-//       from: process.env.EMAIL_USER,
-//       to: email,
-//       subject: "Password Reset OTP",
-//       text: `Your OTP for resetting your password is ${otp}. This OTP will expire in 10 minutes.`,
-//     };
-
-//     await transporter.sendMail(mailOptions);
-
-//     logger.info(`OTP sent to ${email}`);
-//     res.status(200).json({ message: "OTP sent to your email" });
-//   } catch (error) {
-//     logger.error("Error during forgot password:", error);
-//     res.status(500).json({ message: "Internal Server Error" });
-//   }
-// };
-
-// const verifyOTP = async (req, res) => {
-//   try {
-//     const { email, otp } = req.body;
-
-//     const result = await findUser(email);
-//     if (!result) {
-//       return res.status(404).json({ message: "Email not found" });
-//     }
-
-//     const { type, user } = result;
-
-//     if (!user.otp || !user.otpExpiry) {
-//       return res.status(400).json({ message: "No OTP found for this email" });
-//     }
-
-//     if (Date.now() > user.otpExpiry) {
-//       return res.status(400).json({ message: "OTP has expired" });
-//     }
-
-//     if (parseInt(otp, 10) !== user.otp) {
-//       return res.status(400).json({ message: "Invalid OTP" });
-//     }
-
-//     // Clear OTP and expiry after successful verification
-//     user.otp = null;
-//     user.otpExpiry = null;
-//     await user.save();
-
-//     logger.info("OTP verified successfully");
-//     res.status(200).json({ message: "OTP verified successfully" });
-//   } catch (error) {
-//     logger.error("Error during OTP verification:", error);
-//     res.status(500).json({ message: "Internal Server Error" });
-//   }
-// };
-
-// const updatePassword = async (req, res) => {
-//   try {
-//     const { email, oldPassword, newPassword } = req.body;
-
-//     if (!email || !newPassword) {
-//       return res
-//         .status(400)
-//         .json({ message: "Email and new password are required" });
-//     }
-
-//     const result = await findUser(email);
-//     if (!result) {
-//       return res.status(404).json({ message: "User not found" });
-//     }
-
-//     const { type, user } = result;
-
-//     if (oldPassword) {
-//       const isOldPasswordValid = await bcrypt.compare(
-//         oldPassword,
-//         user.password
-//       );
-//       if (!isOldPasswordValid) {
-//         return res.status(400).json({ message: "Old password is incorrect" });
-//       }
-//     }
-
-//     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
-//     user.password = hashedNewPassword;
-//     await user.save();
-
-//     const mailOptions = {
-//       from: process.env.EMAIL_USER,
-//       to: email,
-//       subject: "Password Updated Successfully",
-//       text: `Your password has been successfully updated.`,
-//     };
-
-//     await transporter.sendMail(mailOptions);
-
-//     logger.info("Password updated successfully and email notification sent");
-//     res
-//       .status(200)
-//       .json({ message: "Password updated successfully and email sent" });
-//   } catch (error) {
-//     logger.error("Error updating password:", error);
-//     res.status(500).json({ message: "Internal Server Error" });
-//   }
-// };
-
+// File upload configuration
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, "../uploads");
@@ -177,8 +331,7 @@ const handleFileSizeError = (err, req, res, next) => {
   next(err);
 };
 
-
-
+// Old password login function (optional - remove if not needed)
 const adminLogin = async (req, res) => {
   try {
     const { email, password, location, ipAddress, phone } = req.body;
@@ -196,6 +349,13 @@ const adminLogin = async (req, res) => {
       return res.status(404).json({ message: "Invalid email" });
     }
 
+    // Check if password exists
+    if (!user.password) {
+      return res.status(400).json({ 
+        message: "Password login not available. Please use OTP login." 
+      });
+    }
+
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(401).json({ message: "Incorrect password" });
@@ -211,8 +371,38 @@ const adminLogin = async (req, res) => {
     const geoLocation = location || "Unknown location";
     const userIp = ipAddress || "Unknown IP";
 
-    // Update login metadata (only for Admins for now)
+    // ✅ CRITICAL: Link guest orders to this user
+    let linkedOrdersCount = 0;
     if (type === 'admin') {
+      // Find all guest orders with this email
+      const guestOrders = await Order.find({
+        $or: [
+          { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+          { userEmail: { $regex: new RegExp(`^${email}$`, 'i') } }
+        ],
+        $or: [
+          { userId: { $exists: false } },
+          { userId: null }
+        ]
+      });
+
+      if (guestOrders.length > 0) {
+        // Update all guest orders with userId
+        const result = await Order.updateMany(
+          {
+            _id: { $in: guestOrders.map(order => order._id) }
+          },
+          {
+            $set: { 
+              userId: user._id,
+              isGuest: false
+            }
+          }
+        );
+        linkedOrdersCount = result.modifiedCount;
+      }
+      
+      // Update login metadata
       await Admin.updateOne(
         { _id: user._id },
         { ipAddress: userIp, timeStamp: timestamp, location: geoLocation, phone },
@@ -220,9 +410,10 @@ const adminLogin = async (req, res) => {
       );
     }
 
-    logger.info(`${type} logged in successfully`);
+    logger.info(`${type} logged in with password successfully${linkedOrdersCount > 0 ? ` - ${linkedOrdersCount} guest orders linked` : ''}`);
 
-    res.json({
+    // Response prepare करें
+    const responseData = {
       status: "success",
       message: "Login successful",
       token,
@@ -233,18 +424,25 @@ const adminLogin = async (req, res) => {
         location: geoLocation,
         type,
         phone: user.phone,
-      },
-    });
+      }
+    };
+
+    // ✅ Add guest orders linking info to response
+    if (linkedOrdersCount > 0) {
+      responseData.guestOrdersLinked = linkedOrdersCount;
+      responseData.message = `Login successful! ${linkedOrdersCount} previous guest orders linked to your account.`;
+    }
+
+    res.json(responseData);
+    
   } catch (error) {
     logger.error("Error during login:", error);
     res.status(500).json({ message: "Internal Server Error" });
   }
 };
 
-
 const createAdmin = async (req, res) => {
   try {
-    // const { email, name, phone, address, location, role = "User", password } = req.body;
     let { email, name, phone, address, location, role = "User", password } = req.body;
     if (typeof address === "string") {
       address = [address];
@@ -252,22 +450,23 @@ const createAdmin = async (req, res) => {
 
     const image = req.file ? req.file.filename : null;
 
-    if (!password) {
-      return res.status(400).json({ message: "Password is required" });
-    }
-
+    // Password is now optional for OTP login
     const existingAdmin = await Admin.findOne({ email });
     if (existingAdmin) {
       return res.status(400).json({ message: "Email is already registered" });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    let hashedPassword = null;
+    if (password) {
+      hashedPassword = await bcrypt.hash(password, 10);
+    }
 
     const timeStamp = new Date().toISOString();
 
+    // Create new admin
     const admin = await Admin.create({
       email,
-      password: hashedPassword,
+      password: hashedPassword, // Can be null for OTP-only users
       name,
       phone,
       address,
@@ -277,20 +476,72 @@ const createAdmin = async (req, res) => {
       timeStamp,
     });
 
-    logger.info("Admin created successfully");
-    res.status(201).json({ message: "Admin created successfully", admin });
+    // ✅ CRITICAL: Link guest orders to new user account
+    let linkedOrdersCount = 0;
+    const guestOrders = await Order.find({
+      $or: [
+        { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+        { userEmail: { $regex: new RegExp(`^${email}$`, 'i') } }
+      ],
+      $or: [
+        { userId: { $exists: false } },
+        { userId: null }
+      ]
+    });
+
+    if (guestOrders.length > 0) {
+      const result = await Order.updateMany(
+        {
+          _id: { $in: guestOrders.map(order => order._id) }
+        },
+        {
+          $set: { 
+            userId: admin._id,
+            isGuest: false
+          }
+        }
+      );
+      linkedOrdersCount = result.modifiedCount;
+    }
+
+    // Send OTP for first time verification
+    const otp = crypto.randomInt(100000, 999999).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    
+    await OTP.create({
+      email,
+      otp,
+      expiresAt,
+      type: 'email'
+    });
+    
+    await sendEmailOtp(email, otp);
+
+    logger.info("Admin created successfully with OTP sent");
+
+    const responseData = {
+      message: "Admin created successfully. OTP sent to email for verification.",
+      data: admin,
+      otpSent: true
+    };
+
+    // ✅ Add guest orders linking info
+    if (linkedOrdersCount > 0) {
+      responseData.guestOrdersLinked = linkedOrdersCount;
+      responseData.message = `Account created! ${linkedOrdersCount} previous guest orders linked to your account. OTP sent for verification.`;
+    }
+
+    res.status(201).json(responseData);
+    
   } catch (error) {
     logger.error("Error creating admin:", error);
     res.status(500).json({ message: "Internal Server Error" });
   }
 };
 
-
-
 const updateAdmin = async (req, res) => {
   try {
     const { id } = req.params;
-    // const { name, phone, address, location, email, password, role } = req.body;
     let { name, phone, address, location, email, password, role } = req.body;
     if (typeof address === "string") {
       address = [address];
@@ -327,7 +578,6 @@ const updateAdmin = async (req, res) => {
   }
 };
 
-
 const readAdmin = async (req, res) => {
   try {
     const { id } = req.params;
@@ -358,6 +608,7 @@ const deleteAdmin = async (req, res) => {
     res.status(500).json({ message: "Internal Server Error" });
   }
 };
+
 const readAllAdmins = async (req, res) => {
   try {
     const { page = 1, limit = 10, search = "" } = req.query;
@@ -393,8 +644,6 @@ const readAllAdmins = async (req, res) => {
   }
 };
 
-
-
 const getImage = async (req, res) => {
   try {
     const { filename } = req.params;
@@ -428,7 +677,6 @@ const getAdminCount = async (req, res) => {
   }
 };
 
-
 module.exports = {
   createAdmin: [upload, handleFileSizeError, createAdmin],
   updateAdmin: [upload, handleFileSizeError, updateAdmin],
@@ -436,7 +684,8 @@ module.exports = {
   deleteAdmin,
   readAllAdmins,
   getImage,
-  adminLogin, 
+  adminLogin,
+  loginWithOtp,
+  sendOtp,
   getAdminCount,
 };
-

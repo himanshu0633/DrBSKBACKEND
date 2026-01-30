@@ -1,29 +1,21 @@
-const express = require("express");
-const {
-  adminLogin,
-  updateAdmin,
-  readAdmin,
-  deleteAdmin,
-  readAllAdmins,
-  createAdmin,
-  getAdminCount,
-} = require("../controllers/adminControllers");
-
-const tokenRequired = require("../middlewares/authMiddlewares");
-
+const express = require('express');
 const router = express.Router();
+const adminController = require('../controllers/adminControllers');
 
-router.post("/login", adminLogin);
-// router.post("/forgotPassword", forgotPassword);
-// router.post("/verifyOTP", verifyOTP);
-// router.post("/updatePassword", updatePassword);
+// OTP based routes
+router.post('/send-otp', adminController.sendOtp);
+router.post('/login-with-otp', adminController.loginWithOtp);
 
-router.post("/createAdmin", createAdmin);
-router.get("/readallAdmins", readAllAdmins);
-router.put("/updateAdmin/:id", updateAdmin);
-router.get("/readAdmin/:id", readAdmin);
-router.delete("/deleteAdmin/:id", deleteAdmin);
-router.get("/count", getAdminCount);
+// Old password based routes (optional - remove if not needed)
+router.post('/login', adminController.adminLogin);
 
+// Other routes
+router.post('/create', adminController.createAdmin);
+router.put('/update/:id', adminController.updateAdmin);
+router.get('/read/:id', adminController.readAdmin);
+router.delete('/delete/:id', adminController.deleteAdmin);
+router.get('/read-all', adminController.readAllAdmins);
+router.get('/image/:filename', adminController.getImage);
+router.get('/count', adminController.getAdminCount);
 
 module.exports = router;
