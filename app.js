@@ -402,29 +402,6 @@ app.get("/api/facebook-logs", (req, res) => {
   });
 });
 
-<<<<<<< HEAD
-
-// Debug middleware - सभी incoming requests log करेगा
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  console.log('Headers:', req.headers);
-  console.log('Body:', req.body);
-  next();
-});
-
-// या specific debug:
-console.log('\n=== Registered Routes ===');
-console.log('POST /user/createPrescription');
-console.log('GET  /user/allPrescriptions');
-
-// app.js में, app.use("/user", usersRoutes); के बाद:
-
-// Direct prescription route for testing
-const upload = require("./middlewares/uploadMiddleware");
-const prescriptionController = require("./controllers/prescriptionController");
-
-app.post("/user/createPrescription", upload.single("image"), prescriptionController.createPrescription);
-=======
 // Root endpoint
 app.get('/', (req, res) => {
   const serverInfo = {
@@ -456,4 +433,3 @@ app.get('/api/facebook-config', (req, res) => {
 });
 
 module.exports = app;
->>>>>>> d80128405efbdc8f9ab64fb2832390467298a7f1
