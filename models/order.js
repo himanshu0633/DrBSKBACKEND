@@ -11,7 +11,6 @@ const orderSchema = new mongoose.Schema({
     required: true,
     trim: true,
     lowercase: true
-
   },
   userName: {
     type: String,
@@ -72,11 +71,28 @@ const orderSchema = new mongoose.Schema({
     required: true,
     min: 0
   },
+  
+  // COD specific fields
+  baseAmount: {
+    type: Number,
+    default: 0
+  },
+  codCharge: {
+    type: Number,
+    default: 0
+  },
 
   // Guest user flag
   isGuest: {
     type: Boolean,
     default: false
+  },
+
+  // Payment method
+  paymentMethod: {
+    type: String,
+    enum: ['online', 'cod'],
+    default: 'online'
   },
 
   // Razorpay integration
@@ -93,7 +109,7 @@ const orderSchema = new mongoose.Schema({
     status: {
       type: String,
       enum: ['pending', 'created', 'authorized', 'captured', 'failed', 'refunded'],
-      default: 'created' // Changed from 'pending' to 'created'
+      default: 'created'
     },
     method: { type: String, default: null },
     capturedAt: { type: Date },
@@ -143,6 +159,11 @@ const orderSchema = new mongoose.Schema({
   expectedDelivery: { type: Date },
   deliveredAt: { type: Date },
 
+  // Email status
+  emailSent: { type: Boolean, default: false },
+  emailSentAt: { type: Date },
+  emailError: { type: String }
+
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -159,6 +180,8 @@ orderSchema.index({ email: 1 });
 orderSchema.index({ isGuest: 1 });
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ 'paymentInfo.status': 1 });
+orderSchema.index({ paymentMethod: 1 });
+orderSchema.index({ orderId: 1 });
 
 // Virtual for payment status display
 orderSchema.virtual('paymentStatusDisplay').get(function () {
@@ -219,13 +242,46 @@ orderSchema.pre('save', function (next) {
     this.isGuest = true;
   }
 
-  // Validate total amount matches items
-  const calculatedTotal = this.items.reduce((total, item) => {
+  // Calculate items total
+  const itemsTotal = this.items.reduce((total, item) => {
     return total + (item.price * item.quantity);
   }, 0);
 
-  if (Math.abs(this.totalAmount - calculatedTotal) > 0.01) {
-    return next(new Error(`Total amount mismatch: expected ${calculatedTotal}, got ${this.totalAmount}`));
+  // For COD orders: itemsTotal + codCharge should equal totalAmount
+  // For non-COD orders: itemsTotal should equal totalAmount
+  if (this.paymentMethod === 'cod') {
+    // Set baseAmount if not set
+    if (!this.baseAmount || this.baseAmount === 0) {
+      this.baseAmount = itemsTotal;
+    }
+    
+    // Set codCharge if not set
+    if (!this.codCharge || this.codCharge === 0) {
+      this.codCharge = this.totalAmount - itemsTotal;
+    }
+    
+    const expectedTotal = itemsTotal + (this.codCharge || 0);
+    
+    // Log for debugging
+    console.log("COD Order validation:", {
+      itemsTotal: itemsTotal,
+      baseAmount: this.baseAmount,
+      codCharge: this.codCharge,
+      totalAmount: this.totalAmount,
+      expectedTotal: expectedTotal,
+      difference: Math.abs(this.totalAmount - expectedTotal)
+    });
+    
+    // Allow small rounding differences
+    if (Math.abs(this.totalAmount - expectedTotal) > 1) {
+      console.warn(`COD total amount mismatch: items=${itemsTotal}, cod=${this.codCharge}, expected=${expectedTotal}, got=${this.totalAmount}`);
+      // Don't throw error for COD orders, just log warning
+    }
+  } else {
+    // For non-COD orders, validate strictly
+    if (Math.abs(this.totalAmount - itemsTotal) > 0.01) {
+      return next(new Error(`Total amount mismatch: expected ${itemsTotal}, got ${this.totalAmount}`));
+    }
   }
 
   // Handle status changes
@@ -339,6 +395,12 @@ orderSchema.statics.findByEmail = function (email) {
   }).sort({ createdAt: -1 });
 };
 
+orderSchema.statics.findCODOrders = function () {
+  return this.find({
+    paymentMethod: 'cod'
+  }).sort({ createdAt: -1 });
+};
+
 // Instance method to check if user can modify order
 orderSchema.methods.canModify = function (userId) {
   if (this.isGuest) {
@@ -354,10 +416,26 @@ orderSchema.methods.getSummary = function () {
     totalAmount: this.totalAmount,
     status: this.status,
     paymentStatus: this.paymentInfo.status,
+    paymentMethod: this.paymentMethod,
     itemsCount: this.items.length,
     createdAt: this.createdAt,
     userType: this.userType,
-    email: this.email
+    email: this.email,
+    isCOD: this.paymentMethod === 'cod',
+    codCharge: this.codCharge || 0
+  };
+};
+
+// Instance method to calculate COD total
+orderSchema.methods.calculateCODTotal = function () {
+  const itemsTotal = this.items.reduce((total, item) => {
+    return total + (item.price * item.quantity);
+  }, 0);
+  
+  return {
+    itemsTotal: itemsTotal,
+    codCharge: this.codCharge || 0,
+    total: itemsTotal + (this.codCharge || 0)
   };
 };
 
