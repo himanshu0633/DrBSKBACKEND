@@ -65,25 +65,19 @@ exports.getAllProducts = async (req, res) => {
 // Get a single product by ID
 exports.getProductById = async (req, res) => {
   try {
-    const product = await Product.findOne({
-      _id: req.params.id,
-      deleted_at: null,
-    })
-      .populate("category")
-      .populate("sub_category");
+    const product = await Product.findById(req.params.id);
 
     if (!product) {
-      logger.warn(`Product not found with ID: ${req.params.id}`);
       return res.status(404).json({ message: "Product not found" });
     }
 
-    logger.info(`Product retrieved: ${product._id}`);
     res.status(200).json(product);
   } catch (error) {
-    logger.error(`Error fetching product by ID (${req.params.id}):`, error);
+    console.error("GET PRODUCT ERROR:", error);
     res.status(500).json({ message: error.message });
   }
 };
+
 
 // option 1:  Update a product
 exports.updateProduct = async (req, res) => {
