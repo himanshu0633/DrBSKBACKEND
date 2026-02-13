@@ -9,6 +9,7 @@ const nodemailer = require('nodemailer');
 const razorpayWebhookRouter = require('./routes/razorpayWebhook');
 const facebookRateLimiter = require('./middlewares/facebookRateLimiter');
 
+
 console.log('Admin routes loaded:', typeof adminRoutes);
 
 // In-memory OTP store (for demo; switch to DB or cache in production)
@@ -33,7 +34,10 @@ dotenv.config();
 connectDB();
 
 const app = express();
-app.use(express.json({ limit: '10mb' }))
+
+// ✅ FIXED: Enable JSON parsing for ALL HTTP methods including DELETE
+app.use(express.json({ limit: '10mb', type: ['application/json', 'application/*+json', '*/*'] }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' })); // Add URL encoded support
 app.use(cors());
 app.set("trust proxy", true);
 app.use('/uploads', express.static('uploads'));
@@ -163,6 +167,12 @@ app.post('/api/facebook-events', facebookRateLimiter, async (req, res) => {
     });
   }
 });
+
+// Add this with your other routes
+const couponRoutes = require('./routes/couponRoutes');
+
+// Use routes
+app.use('/api/coupons', couponRoutes);
 
 // Facebook Health Check
 app.get('/api/facebook-events/health', (req, res) => {

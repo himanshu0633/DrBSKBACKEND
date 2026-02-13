@@ -11,7 +11,7 @@ const nodemailer = require('nodemailer');
 // Debug middleware
 router.use((req, res, next) => {
   console.log(`\n[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  if (req.body) {
+  if (req.body && Object.keys(req.body).length > 0) {
     console.log('Body:', JSON.stringify(req.body, null, 2));
   }
   next();
@@ -25,14 +25,14 @@ if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
 }
 
 console.log("✅ Razorpay credentials loaded:", {
-  keyId: "rzp_live_RsAhVxy2ldrBIl" ? `${process.env.RAZORPAY_KEY_ID.substring(0, 10)}...` : "missing",
-  keySecret:"wSS6yEWqeQWqJjsYZH6VhnPZ"? "***SECRET***" : "missing"
+  keyId: process.env.RAZORPAY_KEY_ID ? `${process.env.RAZORPAY_KEY_ID.substring(0, 10)}...` : "missing",
+  keySecret: process.env.RAZORPAY_KEY_SECRET ? "***SECRET***" : "missing"
 });
 
 // Initialize Razorpay instance with environment variables only
 const razorpayInstance = new Razorpay({
-  key_id: "rzp_live_RsAhVxy2ldrBIl",
-  key_secret: "wSS6yEWqeQWqJjsYZH6VhnPZ",
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
 // Email transporter setup
@@ -632,7 +632,7 @@ router.post('/verifyPayment', async (req, res) => {
 
     // Verify payment signature
     const generatedSignature = crypto
-      .createHmac('sha256', 'wSS6yEWqeQWqJjsYZH6VhnPZ')
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
@@ -874,10 +874,10 @@ router.put('/orders/:orderId/status', async (req, res) => {
   console.log("New Status:", status);
   console.log("Cancel Reason:", cancelReason);
 
-  if (!['Pending', 'Delivered', 'Cancelled'].includes(status)) {
+  if (!['Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'].includes(status)) {
     return res.status(400).json({
       success: false,
-      message: "Invalid status. Must be Pending, Delivered, or Cancelled"
+      message: "Invalid status"
     });
   }
 
@@ -1046,6 +1046,216 @@ router.put('/orders/:orderId/status', async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update order status",
+      error: error.message
+    });
+  }
+});
+
+// ==================== DELETE ORDER API - FIXED ====================
+// Delete Order (Admin only)
+router.delete('/orders/:orderId', async (req, res) => {
+  const { orderId } = req.params;
+
+  console.log("=== DELETE ORDER REQUEST ===");
+  console.log("Order ID:", orderId);
+  console.log("Timestamp:", new Date().toISOString());
+
+  try {
+    // Find the order first
+    const order = await Order.findById(orderId);
+    
+    if (!order) {
+      console.log("❌ Order not found:", orderId);
+      return res.status(404).json({
+        success: false,
+        message: "Order not found"
+      });
+    }
+
+    console.log("✅ Order found:", {
+      id: order._id,
+      status: order.status,
+      amount: order.totalAmount,
+      paymentStatus: order.paymentInfo?.status,
+      refundStatus: order.refundInfo?.status
+    });
+
+    // Check if order can be deleted
+    // Only allow deletion for certain statuses
+    const deletableStatuses = ['Pending', 'Cancelled', 'Delivered'];
+    if (!deletableStatuses.includes(order.status)) {
+      console.log("❌ Order cannot be deleted - invalid status:", order.status);
+      return res.status(400).json({
+        success: false,
+        message: `Order with status '${order.status}' cannot be deleted. Only orders with status: ${deletableStatuses.join(', ')} can be deleted.`
+      });
+    }
+
+    // Check if order has refund in progress
+    if (order.refundInfo?.status === 'initiated') {
+      console.log("❌ Order cannot be deleted - refund in progress:", order.refundInfo.status);
+      return res.status(400).json({
+        success: false,
+        message: "Cannot delete order while refund is in progress. Please wait for refund to complete."
+      });
+    }
+
+    // Store order details for response before deletion
+    const orderDetails = {
+      _id: order._id,
+      orderId: order.razorpayOrderId,
+      amount: order.totalAmount,
+      status: order.status,
+      email: order.email,
+      userName: order.userName,
+      createdAt: order.createdAt,
+      itemsCount: order.items?.length || 0
+    };
+
+    // Delete the order
+    await Order.findByIdAndDelete(orderId);
+    console.log("✅ Order deleted successfully from database:", orderId);
+
+    // ✅ FIXED: Safe access to req.body with optional chaining
+    const deletedBy = req.body?.deletedBy || 'admin';
+
+    // Log the deletion
+    if (logger && typeof logger.info === 'function') {
+      logger.info("Order deleted successfully", {
+        orderId: order._id,
+        razorpayOrderId: order.razorpayOrderId,
+        amount: order.totalAmount,
+        status: order.status,
+        deletedBy: deletedBy,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Order deleted successfully",
+      deletedOrder: orderDetails
+    });
+
+  } catch (error) {
+    console.error("❌ Error deleting order:", error);
+    console.error("Error stack:", error.stack);
+    
+    if (logger && typeof logger.error === 'function') {
+      logger.error("Error deleting order", {
+        orderId,
+        error: error.message,
+        stack: error.stack
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete order",
+      error: error.message
+    });
+  }
+});
+
+// ==================== BULK DELETE ORDERS API - FIXED ====================
+// Bulk delete orders (Admin only)
+router.post('/orders/bulk-delete', async (req, res) => {
+  const { orderIds } = req.body;
+
+  console.log("=== BULK DELETE ORDERS REQUEST ===");
+  console.log("Order IDs to delete:", orderIds);
+  console.log("Total count:", orderIds?.length || 0);
+  console.log("Timestamp:", new Date().toISOString());
+
+  if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Order IDs array is required"
+    });
+  }
+
+  try {
+    // Find all orders first
+    const orders = await Order.find({ _id: { $in: orderIds } });
+    console.log(`✅ Found ${orders.length} orders out of ${orderIds.length} requested`);
+
+    // Check for non-deletable orders
+    const deletableStatuses = ['Pending', 'Cancelled', 'Delivered'];
+    const nonDeletableOrders = orders.filter(order => 
+      !deletableStatuses.includes(order.status)
+    );
+
+    if (nonDeletableOrders.length > 0) {
+      console.log("❌ Non-deletable orders found:", nonDeletableOrders.map(o => ({
+        id: o._id,
+        status: o.status
+      })));
+      
+      return res.status(400).json({
+        success: false,
+        message: `Some orders cannot be deleted. ${nonDeletableOrders.length} orders have non-deletable status.`,
+        nonDeletableOrders: nonDeletableOrders.map(o => ({
+          _id: o._id,
+          status: o.status
+        }))
+      });
+    }
+
+    // Check for orders with pending refunds
+    const ordersWithPendingRefunds = orders.filter(order => 
+      order.refundInfo?.status === 'initiated'
+    );
+
+    if (ordersWithPendingRefunds.length > 0) {
+      console.log("❌ Orders with pending refunds:", ordersWithPendingRefunds.map(o => o._id));
+      
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete ${ordersWithPendingRefunds.length} order(s) with refunds in progress.`,
+        pendingRefundOrders: ordersWithPendingRefunds.map(o => o._id)
+      });
+    }
+
+    // Perform bulk deletion
+    const result = await Order.deleteMany({ _id: { $in: orderIds } });
+
+    console.log(`✅ Bulk deletion completed: ${result.deletedCount} orders deleted`);
+
+    // ✅ FIXED: Safe access to req.body.deletedBy
+    const deletedBy = req.body?.deletedBy || 'admin';
+
+    // Log the bulk deletion
+    if (logger && typeof logger.info === 'function') {
+      logger.info("Bulk orders deleted successfully", {
+        deletedCount: result.deletedCount,
+        requestedCount: orderIds.length,
+        deletedOrders: orderIds,
+        deletedBy: deletedBy,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully deleted ${result.deletedCount} orders`,
+      deletedCount: result.deletedCount
+    });
+
+  } catch (error) {
+    console.error("❌ Error in bulk delete:", error);
+    console.error("Error stack:", error.stack);
+    
+    if (logger && typeof logger.error === 'function') {
+      logger.error("Error in bulk delete orders", {
+        orderIds,
+        error: error.message,
+        stack: error.stack
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete orders",
       error: error.message
     });
   }
@@ -1456,6 +1666,7 @@ router.get('/order/:orderId', async (req, res) => {
     });
   }
 });
+
 // In your backend route
 // routes/product.routes.js
 router.get('/productsBySubcategory', async (req, res) => {
@@ -1551,9 +1762,6 @@ router.get('/productsBySubcategory', async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
-
-
-
 
 // Test route with Razorpay key info
 router.get('/test', (req, res) => {
