@@ -11,7 +11,7 @@ const nodemailer = require('nodemailer');
 // Debug middleware
 router.use((req, res, next) => {
   console.log(`\n[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  if (req.body) {
+  if (req.body && Object.keys(req.body).length > 0) {
     console.log('Body:', JSON.stringify(req.body, null, 2));
   }
   next();
@@ -25,14 +25,14 @@ if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
 }
 
 console.log("✅ Razorpay credentials loaded:", {
-  keyId: "rzp_live_RsAhVxy2ldrBIl" ? `${process.env.RAZORPAY_KEY_ID.substring(0, 10)}...` : "missing",
-  keySecret:"wSS6yEWqeQWqJjsYZH6VhnPZ"? "***SECRET***" : "missing"
+  keyId: process.env.RAZORPAY_KEY_ID ? `${process.env.RAZORPAY_KEY_ID.substring(0, 10)}...` : "missing",
+  keySecret: process.env.RAZORPAY_KEY_SECRET ? "***SECRET***" : "missing"
 });
 
 // Initialize Razorpay instance with environment variables only
 const razorpayInstance = new Razorpay({
-  key_id: "rzp_live_RsAhVxy2ldrBIl",
-  key_secret: "wSS6yEWqeQWqJjsYZH6VhnPZ",
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
 // Email transporter setup
@@ -631,7 +631,7 @@ router.post('/verifyPayment', async (req, res) => {
 
     // Verify payment signature
     const generatedSignature = crypto
-      .createHmac('sha256', 'wSS6yEWqeQWqJjsYZH6VhnPZ')
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
@@ -873,10 +873,10 @@ router.put('/orders/:orderId/status', async (req, res) => {
   console.log("New Status:", status);
   console.log("Cancel Reason:", cancelReason);
 
-  if (!['Pending', 'Delivered', 'Cancelled'].includes(status)) {
+  if (!['Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'].includes(status)) {
     return res.status(400).json({
       success: false,
-      message: "Invalid status. Must be Pending, Delivered, or Cancelled"
+      message: "Invalid status"
     });
   }
 
@@ -1045,6 +1045,216 @@ router.put('/orders/:orderId/status', async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update order status",
+      error: error.message
+    });
+  }
+});
+
+// ==================== DELETE ORDER API - FIXED ====================
+// Delete Order (Admin only)
+router.delete('/orders/:orderId', async (req, res) => {
+  const { orderId } = req.params;
+
+  console.log("=== DELETE ORDER REQUEST ===");
+  console.log("Order ID:", orderId);
+  console.log("Timestamp:", new Date().toISOString());
+
+  try {
+    // Find the order first
+    const order = await Order.findById(orderId);
+    
+    if (!order) {
+      console.log("❌ Order not found:", orderId);
+      return res.status(404).json({
+        success: false,
+        message: "Order not found"
+      });
+    }
+
+    console.log("✅ Order found:", {
+      id: order._id,
+      status: order.status,
+      amount: order.totalAmount,
+      paymentStatus: order.paymentInfo?.status,
+      refundStatus: order.refundInfo?.status
+    });
+
+    // Check if order can be deleted
+    // Only allow deletion for certain statuses
+    const deletableStatuses = ['Pending', 'Cancelled', 'Delivered'];
+    if (!deletableStatuses.includes(order.status)) {
+      console.log("❌ Order cannot be deleted - invalid status:", order.status);
+      return res.status(400).json({
+        success: false,
+        message: `Order with status '${order.status}' cannot be deleted. Only orders with status: ${deletableStatuses.join(', ')} can be deleted.`
+      });
+    }
+
+    // Check if order has refund in progress
+    if (order.refundInfo?.status === 'initiated') {
+      console.log("❌ Order cannot be deleted - refund in progress:", order.refundInfo.status);
+      return res.status(400).json({
+        success: false,
+        message: "Cannot delete order while refund is in progress. Please wait for refund to complete."
+      });
+    }
+
+    // Store order details for response before deletion
+    const orderDetails = {
+      _id: order._id,
+      orderId: order.razorpayOrderId,
+      amount: order.totalAmount,
+      status: order.status,
+      email: order.email,
+      userName: order.userName,
+      createdAt: order.createdAt,
+      itemsCount: order.items?.length || 0
+    };
+
+    // Delete the order
+    await Order.findByIdAndDelete(orderId);
+    console.log("✅ Order deleted successfully from database:", orderId);
+
+    // ✅ FIXED: Safe access to req.body with optional chaining
+    const deletedBy = req.body?.deletedBy || 'admin';
+
+    // Log the deletion
+    if (logger && typeof logger.info === 'function') {
+      logger.info("Order deleted successfully", {
+        orderId: order._id,
+        razorpayOrderId: order.razorpayOrderId,
+        amount: order.totalAmount,
+        status: order.status,
+        deletedBy: deletedBy,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Order deleted successfully",
+      deletedOrder: orderDetails
+    });
+
+  } catch (error) {
+    console.error("❌ Error deleting order:", error);
+    console.error("Error stack:", error.stack);
+    
+    if (logger && typeof logger.error === 'function') {
+      logger.error("Error deleting order", {
+        orderId,
+        error: error.message,
+        stack: error.stack
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete order",
+      error: error.message
+    });
+  }
+});
+
+// ==================== BULK DELETE ORDERS API - FIXED ====================
+// Bulk delete orders (Admin only)
+router.post('/orders/bulk-delete', async (req, res) => {
+  const { orderIds } = req.body;
+
+  console.log("=== BULK DELETE ORDERS REQUEST ===");
+  console.log("Order IDs to delete:", orderIds);
+  console.log("Total count:", orderIds?.length || 0);
+  console.log("Timestamp:", new Date().toISOString());
+
+  if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Order IDs array is required"
+    });
+  }
+
+  try {
+    // Find all orders first
+    const orders = await Order.find({ _id: { $in: orderIds } });
+    console.log(`✅ Found ${orders.length} orders out of ${orderIds.length} requested`);
+
+    // Check for non-deletable orders
+    const deletableStatuses = ['Pending', 'Cancelled', 'Delivered'];
+    const nonDeletableOrders = orders.filter(order => 
+      !deletableStatuses.includes(order.status)
+    );
+
+    if (nonDeletableOrders.length > 0) {
+      console.log("❌ Non-deletable orders found:", nonDeletableOrders.map(o => ({
+        id: o._id,
+        status: o.status
+      })));
+      
+      return res.status(400).json({
+        success: false,
+        message: `Some orders cannot be deleted. ${nonDeletableOrders.length} orders have non-deletable status.`,
+        nonDeletableOrders: nonDeletableOrders.map(o => ({
+          _id: o._id,
+          status: o.status
+        }))
+      });
+    }
+
+    // Check for orders with pending refunds
+    const ordersWithPendingRefunds = orders.filter(order => 
+      order.refundInfo?.status === 'initiated'
+    );
+
+    if (ordersWithPendingRefunds.length > 0) {
+      console.log("❌ Orders with pending refunds:", ordersWithPendingRefunds.map(o => o._id));
+      
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete ${ordersWithPendingRefunds.length} order(s) with refunds in progress.`,
+        pendingRefundOrders: ordersWithPendingRefunds.map(o => o._id)
+      });
+    }
+
+    // Perform bulk deletion
+    const result = await Order.deleteMany({ _id: { $in: orderIds } });
+
+    console.log(`✅ Bulk deletion completed: ${result.deletedCount} orders deleted`);
+
+    // ✅ FIXED: Safe access to req.body.deletedBy
+    const deletedBy = req.body?.deletedBy || 'admin';
+
+    // Log the bulk deletion
+    if (logger && typeof logger.info === 'function') {
+      logger.info("Bulk orders deleted successfully", {
+        deletedCount: result.deletedCount,
+        requestedCount: orderIds.length,
+        deletedOrders: orderIds,
+        deletedBy: deletedBy,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully deleted ${result.deletedCount} orders`,
+      deletedCount: result.deletedCount
+    });
+
+  } catch (error) {
+    console.error("❌ Error in bulk delete:", error);
+    console.error("Error stack:", error.stack);
+    
+    if (logger && typeof logger.error === 'function') {
+      logger.error("Error in bulk delete orders", {
+        orderIds,
+        error: error.message,
+        stack: error.stack
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete orders",
       error: error.message
     });
   }
@@ -1553,224 +1763,224 @@ router.get('/productsBySubcategory', async (req, res) => {
 });
 
 // CREATE COD ORDER - UPDATED VERSION
-router.post('/createCOD', async (req, res) => {
-  console.log("=== CREATE COD ORDER REQUEST ===");
-  console.log("Request body:", JSON.stringify(req.body, null, 2));
+// router.post('/createCOD', async (req, res) => {
+//   console.log("=== CREATE COD ORDER REQUEST ===");
+//   console.log("Request body:", JSON.stringify(req.body, null, 2));
 
-  try {
-    const {
-      userId,
-      items,
-      address,
-      phone,
-      email,
-      totalAmount,
-      baseAmount,
-      codCharge,
-      isGuest,
-      productName,
-      productImage,
-      paymentMethod,
-      paymentStatus
-    } = req.body;
+//   try {
+//     const {
+//       userId,
+//       items,
+//       address,
+//       phone,
+//       email,
+//       totalAmount,
+//       baseAmount,
+//       codCharge,
+//       isGuest,
+//       productName,
+//       productImage,
+//       paymentMethod,
+//       paymentStatus
+//     } = req.body;
 
-    // Validate required fields
-    if (!userId || !items || !address || !phone || !email || !totalAmount) {
-      return res.status(400).json({
-        success: false,
-        message: 'Required fields are missing'
-      });
-    }
+//     // Validate required fields
+//     if (!userId || !items || !address || !phone || !email || !totalAmount) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Required fields are missing'
+//       });
+//     }
 
-    // Email validation
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "Valid email address is required"
-      });
-    }
+//     // Email validation
+//     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Valid email address is required"
+//       });
+//     }
 
-    // Prepare phone number
-    let formattedPhone = phone.toString().trim();
-    formattedPhone = formattedPhone.replace(/^\+91/, '').replace(/^91/, '');
+//     // Prepare phone number
+//     let formattedPhone = phone.toString().trim();
+//     formattedPhone = formattedPhone.replace(/^\+91/, '').replace(/^91/, '');
     
-    console.log("Phone validation:", {
-      original: phone,
-      cleaned: formattedPhone,
-      length: formattedPhone.length,
-      is10Digits: /^\d{10}$/.test(formattedPhone)
-    });
+//     console.log("Phone validation:", {
+//       original: phone,
+//       cleaned: formattedPhone,
+//       length: formattedPhone.length,
+//       is10Digits: /^\d{10}$/.test(formattedPhone)
+//     });
     
-    if (!/^\d{10}$/.test(formattedPhone)) {
-      return res.status(400).json({
-        success: false,
-        message: "Phone number must be exactly 10 digits"
-      });
-    }
-    formattedPhone = `+91${formattedPhone}`;
+//     if (!/^\d{10}$/.test(formattedPhone)) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Phone number must be exactly 10 digits"
+//       });
+//     }
+//     formattedPhone = `+91${formattedPhone}`;
 
-    // Generate order ID
-    const orderId = `COD${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+//     // Generate order ID
+//     const orderId = `COD${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
 
-    // Prepare user name
-    const userName = email.split('@')[0] || 'Customer';
+//     // Prepare user name
+//     const userName = email.split('@')[0] || 'Customer';
 
-    // Prepare items with media
-    console.log("Preparing COD order items...");
-    const itemsWithMedia = await Promise.all(items.map(async (item) => {
-      let media = [];
-      let productDetails = {};
+//     // Prepare items with media
+//     console.log("Preparing COD order items...");
+//     const itemsWithMedia = await Promise.all(items.map(async (item) => {
+//       let media = [];
+//       let productDetails = {};
       
-      try {
-        const product = await Product.findById(item.productId);
-        if (product) {
-          media = product.media || [];
-          media = media.map(mediaItem => ({
-            ...mediaItem,
-            url: processMediaUrl(mediaItem.url)
-          }));
-          productDetails = {
-            category: product.category,
-            description: product.description
-          };
-        }
-      } catch (error) {
-        console.error(`Error fetching product ${item.productId}:`, error.message);
-      }
+//       try {
+//         const product = await Product.findById(item.productId);
+//         if (product) {
+//           media = product.media || [];
+//           media = media.map(mediaItem => ({
+//             ...mediaItem,
+//             url: processMediaUrl(mediaItem.url)
+//           }));
+//           productDetails = {
+//             category: product.category,
+//             description: product.description
+//           };
+//         }
+//       } catch (error) {
+//         console.error(`Error fetching product ${item.productId}:`, error.message);
+//       }
       
-      return {
-        productId: item.productId.toString(),
-        name: item.name.toString().trim(),
-        quantity: parseInt(item.quantity),
-        price: parseFloat(item.price),
-        media: media,
-        ...productDetails
-      };
-    }));
+//       return {
+//         productId: item.productId.toString(),
+//         name: item.name.toString().trim(),
+//         quantity: parseInt(item.quantity),
+//         price: parseFloat(item.price),
+//         media: media,
+//         ...productDetails
+//       };
+//     }));
 
-    // Create COD order in database
-    console.log("Creating COD order in database...");
+//     // Create COD order in database
+//     console.log("Creating COD order in database...");
     
-    const orderData = {
-      orderId: orderId,
-      userId: userId,
-      userEmail: email,
-      userName: userName,
-      email: email,
-      items: itemsWithMedia,
-      address: address.toString().trim(),
-      phone: formattedPhone,
-      totalAmount: parseFloat(totalAmount),
-      baseAmount: baseAmount ? parseFloat(baseAmount) : parseFloat(totalAmount) - (codCharge || 0),
-      codCharge: codCharge || 0,
-      isGuest: isGuest || false,
-      paymentMethod: 'cod',
-      paymentStatus: 'pending',
-      status: 'Pending', // Use 'Pending' instead of 'confirmed'
-      paymentInfo: {
-        method: 'cod',
-        status: 'pending',
-        amount: parseFloat(totalAmount)
-      },
-      emailSent: false,
-      createdAt: new Date()
-    };
+//     const orderData = {
+//       orderId: orderId,
+//       userId: userId,
+//       userEmail: email,
+//       userName: userName,
+//       email: email,
+//       items: itemsWithMedia,
+//       address: address.toString().trim(),
+//       phone: formattedPhone,
+//       totalAmount: parseFloat(totalAmount),
+//       baseAmount: baseAmount ? parseFloat(baseAmount) : parseFloat(totalAmount) - (codCharge || 0),
+//       codCharge: codCharge || 0,
+//       isGuest: isGuest || false,
+//       paymentMethod: 'cod',
+//       paymentStatus: 'pending',
+//       status: 'Pending', // Use 'Pending' instead of 'confirmed'
+//       paymentInfo: {
+//         method: 'cod',
+//         status: 'pending',
+//         amount: parseFloat(totalAmount)
+//       },
+//       emailSent: false,
+//       createdAt: new Date()
+//     };
 
-    console.log("COD Order data:", JSON.stringify(orderData, null, 2));
+//     console.log("COD Order data:", JSON.stringify(orderData, null, 2));
 
-    let savedOrder;
-    try {
-      const newOrder = new Order(orderData);
-      savedOrder = await newOrder.save();
-      console.log("✅ COD Order created in database:", savedOrder._id);
+//     let savedOrder;
+//     try {
+//       const newOrder = new Order(orderData);
+//       savedOrder = await newOrder.save();
+//       console.log("✅ COD Order created in database:", savedOrder._id);
       
-      // Send confirmation email for COD order
-      try {
-        console.log("Sending COD order confirmation email...");
-        const emailResult = await sendOrderConfirmationEmail(
-          savedOrder.toObject(), 
-          email, 
-          userName
-        );
+//       // Send confirmation email for COD order
+//       try {
+//         console.log("Sending COD order confirmation email...");
+//         const emailResult = await sendOrderConfirmationEmail(
+//           savedOrder.toObject(), 
+//           email, 
+//           userName
+//         );
         
-        if (emailResult.success) {
-          console.log(`✅ COD order confirmation email sent to ${email}`);
-          savedOrder.emailSent = true;
-          savedOrder.emailSentAt = new Date();
-          savedOrder.emailError = null;
-          await savedOrder.save();
-        } else {
-          console.log(`⚠️ COD Email sending failed: ${emailResult.error}`);
-          savedOrder.emailSent = false;
-          savedOrder.emailError = emailResult.error;
-          await savedOrder.save();
-        }
-      } catch (emailError) {
-        console.error("Error in COD email sending:", emailError);
-        savedOrder.emailSent = false;
-        savedOrder.emailError = emailError.message;
-        await savedOrder.save();
-      }
+//         if (emailResult.success) {
+//           console.log(`✅ COD order confirmation email sent to ${email}`);
+//           savedOrder.emailSent = true;
+//           savedOrder.emailSentAt = new Date();
+//           savedOrder.emailError = null;
+//           await savedOrder.save();
+//         } else {
+//           console.log(`⚠️ COD Email sending failed: ${emailResult.error}`);
+//           savedOrder.emailSent = false;
+//           savedOrder.emailError = emailResult.error;
+//           await savedOrder.save();
+//         }
+//       } catch (emailError) {
+//         console.error("Error in COD email sending:", emailError);
+//         savedOrder.emailSent = false;
+//         savedOrder.emailError = emailError.message;
+//         await savedOrder.save();
+//       }
       
-    } catch (dbError) {
-      console.error("Database error in COD order:", dbError);
-      console.error("Error details:", dbError.message);
-      console.error("Error stack:", dbError.stack);
+//     } catch (dbError) {
+//       console.error("Database error in COD order:", dbError);
+//       console.error("Error details:", dbError.message);
+//       console.error("Error stack:", dbError.stack);
       
-      // More specific error handling
-      if (dbError.name === 'ValidationError') {
-        const validationErrors = {};
-        Object.keys(dbError.errors).forEach((key) => {
-          validationErrors[key] = dbError.errors[key].message;
-        });
+//       // More specific error handling
+//       if (dbError.name === 'ValidationError') {
+//         const validationErrors = {};
+//         Object.keys(dbError.errors).forEach((key) => {
+//           validationErrors[key] = dbError.errors[key].message;
+//         });
         
-        return res.status(400).json({
-          success: false,
-          message: "Validation error in COD order",
-          error: dbError.message,
-          validationErrors: validationErrors
-        });
-      }
+//         return res.status(400).json({
+//           success: false,
+//           message: "Validation error in COD order",
+//           error: dbError.message,
+//           validationErrors: validationErrors
+//         });
+//       }
       
-      return res.status(500).json({
-        success: false,
-        message: "Failed to save COD order to database",
-        error: dbError.message
-      });
-    }
+//       return res.status(500).json({
+//         success: false,
+//         message: "Failed to save COD order to database",
+//         error: dbError.message
+//       });
+//     }
 
-    console.log("=== COD ORDER CREATION SUCCESS ===");
+//     console.log("=== COD ORDER CREATION SUCCESS ===");
 
-    // Send success response
-    return res.status(201).json({
-      success: true,
-      message: "COD order created successfully!",
-      orderId: savedOrder._id.toString(),
-      orderDetails: {
-        _id: savedOrder._id,
-        orderId: savedOrder.orderId,
-        status: savedOrder.status,
-        totalAmount: savedOrder.totalAmount,
-        baseAmount: savedOrder.baseAmount,
-        codCharge: savedOrder.codCharge,
-        createdAt: savedOrder.createdAt,
-        email: savedOrder.email,
-        paymentMethod: savedOrder.paymentMethod,
-        emailSent: savedOrder.emailSent || false
-      }
-    });
+//     // Send success response
+//     return res.status(201).json({
+//       success: true,
+//       message: "COD order created successfully!",
+//       orderId: savedOrder._id.toString(),
+//       orderDetails: {
+//         _id: savedOrder._id,
+//         orderId: savedOrder.orderId,
+//         status: savedOrder.status,
+//         totalAmount: savedOrder.totalAmount,
+//         baseAmount: savedOrder.baseAmount,
+//         codCharge: savedOrder.codCharge,
+//         createdAt: savedOrder.createdAt,
+//         email: savedOrder.email,
+//         paymentMethod: savedOrder.paymentMethod,
+//         emailSent: savedOrder.emailSent || false
+//       }
+//     });
 
-  } catch (error) {
-    console.error("❌ Error in createCOD:", error);
-    console.error("Error stack:", error.stack);
+//   } catch (error) {
+//     console.error("❌ Error in createCOD:", error);
+//     console.error("Error stack:", error.stack);
     
-    return res.status(500).json({
-      success: false,
-      message: "Failed to create COD order",
-      error: error.message
-    });
-  }
-});
+//     return res.status(500).json({
+//       success: false,
+//       message: "Failed to create COD order",
+//       error: error.message
+//     });
+//   }
+// });
 
 // Test route with Razorpay key info
 router.get('/test', (req, res) => {

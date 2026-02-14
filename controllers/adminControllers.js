@@ -12,7 +12,7 @@ const Order = require("../models/order");
 const mongoose = require('mongoose');
 require("dotenv").config();
 
-// OTP Model (यह अलग file में होना चाहिए, लेकिन temporary यहाँ define कर रहे हैं)
+// OTP Model
 const otpSchema = new mongoose.Schema({
   email: { type: String, required: false },
   phone: { type: String, required: false },
@@ -22,7 +22,6 @@ const otpSchema = new mongoose.Schema({
   type: { type: String, enum: ['email', 'phone'], required: true }
 }, { timestamps: true });
 
-// Add indexes
 otpSchema.index({ email: 1, phone: 1 });
 otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
@@ -43,16 +42,10 @@ const sendOtp = async (req, res) => {
       return res.status(400).json({ message: 'Email or phone is required' });
     }
     
-    // Generate 6-digit OTP
     const otp = crypto.randomInt(100000, 999999).toString();
-    
-    // Set expiry to 10 minutes
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     
-    let otpRecord;
-    
     if (email) {
-      // Check if user exists
       let user = await Admin.findOne({ email });
       if (!user) {
         user = await WholesalePartner.findOne({ billingEmail: email });
@@ -61,22 +54,11 @@ const sendOtp = async (req, res) => {
         }
       }
       
-      // Delete previous OTPs for this email
       await OTP.deleteMany({ email });
-      
-      // Create new OTP record
-      otpRecord = await OTP.create({
-        email,
-        otp,
-        expiresAt,
-        type: 'email'
-      });
-      
-      // Send OTP via email
+      await OTP.create({ email, otp, expiresAt, type: 'email' });
       await sendEmailOtp(email, otp);
       
     } else if (phone) {
-      // Check if user exists with this phone
       let user = await Admin.findOne({ phone });
       if (!user) {
         user = await WholesalePartner.findOne({ phone: phone });
@@ -85,25 +67,14 @@ const sendOtp = async (req, res) => {
         }
       }
       
-      // Delete previous OTPs for this phone
       await OTP.deleteMany({ phone });
-      
-      // Create new OTP record
-      otpRecord = await OTP.create({
-        phone,
-        otp,
-        expiresAt,
-        type: 'phone'
-      });
-      
-      // Send OTP via SMS (you'll need to implement this)
+      await OTP.create({ phone, otp, expiresAt, type: 'phone' });
       await sendSmsOtp(phone, otp);
     }
     
     res.status(200).json({ 
       success: true, 
       message: 'OTP sent successfully',
-      // In development, you might want to return OTP for testing
       otp: process.env.NODE_ENV === 'development' ? otp : undefined
     });
     
@@ -129,7 +100,7 @@ const sendEmailOtp = async (email, otp) => {
     const mailOptions = {
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to: email,
-      subject: 'Your OTP for Login ',
+      subject: 'Your OTP for Login',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #333;">Login OTP</h2>
@@ -156,7 +127,6 @@ const sendEmailOtp = async (email, otp) => {
 
 // SMS sending function (placeholder)
 const sendSmsOtp = async (phone, otp) => {
-  // Implement SMS sending logic here
   logger.info(`OTP for phone ${phone}: ${otp}`);
   return Promise.resolve();
 };
@@ -171,36 +141,24 @@ const loginWithOtp = async (req, res) => {
       });
     }
     
-    // Find OTP record
     let otpRecord;
     if (email) {
-      otpRecord = await OTP.findOne({ 
-        email, 
-        otp,
-        verified: false 
-      });
+      otpRecord = await OTP.findOne({ email, otp, verified: false });
     } else {
-      otpRecord = await OTP.findOne({ 
-        phone, 
-        otp,
-        verified: false 
-      });
+      otpRecord = await OTP.findOne({ phone, otp, verified: false });
     }
     
     if (!otpRecord) {
       return res.status(400).json({ message: 'Invalid OTP' });
     }
     
-    // Check if OTP is expired
     if (new Date() > otpRecord.expiresAt) {
       return res.status(400).json({ message: 'OTP has expired' });
     }
     
-    // Mark OTP as verified
     otpRecord.verified = true;
     await otpRecord.save();
     
-    // Find user
     let user, type;
     if (email) {
       user = await Admin.findOne({ email });
@@ -224,7 +182,6 @@ const loginWithOtp = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
     
-    // Generate JWT token
     const token = jwt.sign(
       { 
         id: user._id, 
@@ -238,7 +195,6 @@ const loginWithOtp = async (req, res) => {
     
     const timestamp = new Date().toISOString();
     
-    // Link guest orders (for email login only)
     let linkedOrdersCount = 0;
     if (email && type === 'admin') {
       const guestOrders = await Order.find({
@@ -267,14 +223,12 @@ const loginWithOtp = async (req, res) => {
         linkedOrdersCount = result.modifiedCount;
       }
       
-      // Update login metadata
       await Admin.updateOne(
         { _id: user._id },
         { 
           timeStamp: timestamp,
           lastLogin: new Date()
-        },
-        { new: true }
+        }
       );
     }
     
@@ -320,10 +274,9 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 1 * 1024 * 1024 }, // 1MB limit (in bytes)
+  limits: { fileSize: 1 * 1024 * 1024 },
 }).single('image');
 
-// Add error handling for file size
 const handleFileSizeError = (err, req, res, next) => {
   if (err && err.code === 'LIMIT_FILE_SIZE') {
     return res.status(400).json({ message: "File size exceeds 1MB limit" });
@@ -331,12 +284,10 @@ const handleFileSizeError = (err, req, res, next) => {
   next(err);
 };
 
-// Old password login function (optional - remove if not needed)
 const adminLogin = async (req, res) => {
   try {
     const { email, password, location, ipAddress, phone } = req.body;
 
-    // Check if user exists
     let user = await Admin.findOne({ email });
     let type = 'admin';
 
@@ -349,7 +300,6 @@ const adminLogin = async (req, res) => {
       return res.status(404).json({ message: "Invalid email" });
     }
 
-    // Check if password exists
     if (!user.password) {
       return res.status(400).json({ 
         message: "Password login not available. Please use OTP login." 
@@ -371,10 +321,8 @@ const adminLogin = async (req, res) => {
     const geoLocation = location || "Unknown location";
     const userIp = ipAddress || "Unknown IP";
 
-    // ✅ CRITICAL: Link guest orders to this user
     let linkedOrdersCount = 0;
     if (type === 'admin') {
-      // Find all guest orders with this email
       const guestOrders = await Order.find({
         $or: [
           { email: { $regex: new RegExp(`^${email}$`, 'i') } },
@@ -387,7 +335,6 @@ const adminLogin = async (req, res) => {
       });
 
       if (guestOrders.length > 0) {
-        // Update all guest orders with userId
         const result = await Order.updateMany(
           {
             _id: { $in: guestOrders.map(order => order._id) }
@@ -402,17 +349,14 @@ const adminLogin = async (req, res) => {
         linkedOrdersCount = result.modifiedCount;
       }
       
-      // Update login metadata
       await Admin.updateOne(
         { _id: user._id },
-        { ipAddress: userIp, timeStamp: timestamp, location: geoLocation, phone },
-        { new: true }
+        { ipAddress: userIp, timeStamp: timestamp, location: geoLocation, phone }
       );
     }
 
     logger.info(`${type} logged in with password successfully${linkedOrdersCount > 0 ? ` - ${linkedOrdersCount} guest orders linked` : ''}`);
 
-    // Response prepare करें
     const responseData = {
       status: "success",
       message: "Login successful",
@@ -427,7 +371,6 @@ const adminLogin = async (req, res) => {
       }
     };
 
-    // ✅ Add guest orders linking info to response
     if (linkedOrdersCount > 0) {
       responseData.guestOrdersLinked = linkedOrdersCount;
       responseData.message = `Login successful! ${linkedOrdersCount} previous guest orders linked to your account.`;
@@ -450,7 +393,6 @@ const createAdmin = async (req, res) => {
 
     const image = req.file ? req.file.filename : null;
 
-    // Password is now optional for OTP login
     const existingAdmin = await Admin.findOne({ email });
     if (existingAdmin) {
       return res.status(400).json({ message: "Email is already registered" });
@@ -463,10 +405,9 @@ const createAdmin = async (req, res) => {
 
     const timeStamp = new Date().toISOString();
 
-    // Create new admin
     const admin = await Admin.create({
       email,
-      password: hashedPassword, // Can be null for OTP-only users
+      password: hashedPassword,
       name,
       phone,
       address,
@@ -476,7 +417,6 @@ const createAdmin = async (req, res) => {
       timeStamp,
     });
 
-    // ✅ CRITICAL: Link guest orders to new user account
     let linkedOrdersCount = 0;
     const guestOrders = await Order.find({
       $or: [
@@ -504,7 +444,6 @@ const createAdmin = async (req, res) => {
       linkedOrdersCount = result.modifiedCount;
     }
 
-    // Send OTP for first time verification
     const otp = crypto.randomInt(100000, 999999).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     
@@ -525,7 +464,6 @@ const createAdmin = async (req, res) => {
       otpSent: true
     };
 
-    // ✅ Add guest orders linking info
     if (linkedOrdersCount > 0) {
       responseData.guestOrdersLinked = linkedOrdersCount;
       responseData.message = `Account created! ${linkedOrdersCount} previous guest orders linked to your account. OTP sent for verification.`;
@@ -609,40 +547,80 @@ const deleteAdmin = async (req, res) => {
   }
 };
 
+// ================ UPDATED FUNCTION - RETURNS ALL USERS ================
 const readAllAdmins = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search = "" } = req.query;
+    const { search = "", getAll = false, page, limit } = req.query;
 
+    // Search filter
+    const searchFilter = {
+      deleted_at: null,
+      ...(search && {
+        $or: [
+          { name: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
+          { phone: { $regex: search, $options: "i" } },
+          { address: { $elemMatch: { $regex: search, $options: "i" } } },
+        ]
+      })
+    };
+
+    // CASE 1: getAll=true - Return ALL users without pagination
+    if (getAll === 'true' || getAll === true) {
+      const admins = await Admin.find(searchFilter).sort({ createdAt: -1 });
+      const totalCount = admins.length;
+
+      logger.info(`All admins fetched successfully. Total: ${totalCount}`);
+
+      return res.status(200).json({
+        success: true,
+        data: admins,
+        totalCount,
+        message: "All admins fetched successfully"
+      });
+    }
+
+    // CASE 2: No page/limit params - Return ALL users (default behavior)
+    if (!page && !limit) {
+      const admins = await Admin.find(searchFilter).sort({ createdAt: -1 });
+      const totalCount = admins.length;
+
+      return res.status(200).json({
+        success: true,
+        data: admins,
+        totalCount,
+        message: "All admins fetched successfully"
+      });
+    }
+
+    // CASE 3: Paginated response (when page/limit are provided)
     const pageNumber = Math.max(1, parseInt(page, 10) || 1);
     const limitNumber = Math.max(1, parseInt(limit, 10) || 10);
 
-    const searchFilter = {
-      deleted_at: null,
-      $or: [
-        { name: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-        { phone: { $regex: search, $options: "i" } },
-        { address: { $elemMatch: { $regex: search, $options: "i" } } },
-      ],
-    };
-
     const totalCount = await Admin.countDocuments(searchFilter);
-
     const admins = await Admin.find(searchFilter)
+      .sort({ createdAt: -1 })
       .skip((pageNumber - 1) * limitNumber)
       .limit(limitNumber);
 
     res.status(200).json({
+      success: true,
       data: admins,
       totalCount,
       currentPage: pageNumber,
       totalPages: Math.ceil(totalCount / limitNumber),
+      message: "Paginated admins fetched successfully"
     });
+    
   } catch (error) {
     logger.error("Error reading Admin:", error);
-    res.status(500).json({ message: "Internal Server Error" });
+    res.status(500).json({ 
+      success: false,
+      message: "Internal Server Error" 
+    });
   }
 };
+// ======================================================================
 
 const getImage = async (req, res) => {
   try {
@@ -661,15 +639,12 @@ const getImage = async (req, res) => {
 
 const getAdminCount = async (req, res) => {
   try {
-    // Get count of admins not marked as deleted
     const count = await Admin.countDocuments({ deleted_at: null });
-
-    // Get only the created_at dates, exclude _id
     const admins = await Admin.find({ deleted_at: null }).select({ createdAt: 1, _id: 0 });
 
     res.status(200).json({
       totalAdmins: count,
-      createdDates: admins,  // More descriptive key name
+      createdDates: admins,
     });
   } catch (error) {
     logger.error("Error fetching admin data:", error);
