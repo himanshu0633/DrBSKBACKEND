@@ -29,11 +29,18 @@ console.log("✅ Razorpay credentials loaded:", {
   keySecret: process.env.RAZORPAY_KEY_SECRET ? "***SECRET***" : "missing"
 });
 
-// Initialize Razorpay instance with environment variables only
-const razorpayInstance = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+// Initialize Razorpay instance with proper error handling
+let razorpayInstance;
+try {
+  razorpayInstance = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
+  });
+  console.log("✅ Razorpay instance created successfully");
+} catch (initError) {
+  console.error("❌ Failed to initialize Razorpay:", initError.message);
+  throw initError;
+}
 
 // Email transporter setup
 const transporter = nodemailer.createTransport({
@@ -463,6 +470,7 @@ router.post('/orders/link-guest-orders', async (req, res) => {
 });
 
 // Create Razorpay Order
+// Create Razorpay Order
 router.post('/createPaymentOrder', async (req, res) => {
   const { userId, items, address, phone, totalAmount, email } = req.body;
 
@@ -526,23 +534,26 @@ router.post('/createPaymentOrder', async (req, res) => {
     }
     formattedPhone = `+91${formattedPhone}`;
 
-    // Check Razorpay credentials
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-      console.error("Razorpay credentials missing");
+    // Check Razorpay instance
+    if (!razorpayInstance) {
+      console.error("Razorpay instance not initialized");
       return res.status(500).json({
         success: false,
-        message: "Payment gateway configuration error"
+        message: "Payment gateway not configured properly"
       });
     }
 
-    // Calculate amount
+    // Calculate amount (convert to paise)
     const amountInPaise = Math.round(totalAmount * 100);
     
-    // Create Razorpay Order
+    // Create receipt - make sure it's unique
+    const receipt = `rcpt_${Date.now()}_${userId.toString().slice(-6)}`;
+    
+    // Create Razorpay Order with correct format
     const razorpayOrderData = {
       amount: amountInPaise,
       currency: "INR",
-      receipt: `order_${Date.now()}_${userId.toString().slice(-6)}`,
+      receipt: receipt,
       notes: {
         userId: userId.toString(),
         phone: formattedPhone,
@@ -553,35 +564,61 @@ router.post('/createPaymentOrder', async (req, res) => {
       }
     };
 
-    console.log("Creating Razorpay order with data:", razorpayOrderData);
+    console.log("Creating Razorpay order with data:", JSON.stringify(razorpayOrderData, null, 2));
 
     let razorpayOrder;
     try {
+      // Use async/await properly
       razorpayOrder = await razorpayInstance.orders.create(razorpayOrderData);
-      console.log("✅ Razorpay order created:", razorpayOrder.id);
+      console.log("✅ Razorpay order created successfully:", {
+        id: razorpayOrder.id,
+        amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency
+      });
     } catch (razorpayError) {
-      console.error("❌ Razorpay error:", razorpayError.message);
-      console.error("Razorpay error details:", razorpayError.error);
+      console.error("❌ Razorpay error details:", {
+        message: razorpayError.message,
+        error: razorpayError.error,
+        statusCode: razorpayError.statusCode,
+        stack: razorpayError.stack
+      });
+      
+      // Check for specific error types
+      if (razorpayError.error && razorpayError.error.code === 'BAD_REQUEST_ERROR') {
+        if (razorpayError.error.description === 'Authentication failed') {
+          return res.status(500).json({
+            success: false,
+            message: "Payment gateway authentication failed. Please check Razorpay configuration.",
+            error: "Authentication failed"
+          });
+        }
+      }
+      
       return res.status(500).json({
         success: false,
         message: "Failed to create payment order. Please try again.",
-        error: razorpayError.message
+        error: razorpayError.message,
+        details: razorpayError.error
       });
     }
 
+    // Send success response with order details
     res.status(200).json({
       success: true,
-      message: "Payment order created",
+      message: "Payment order created successfully",
       order: {
         id: razorpayOrder.id,
         amount: razorpayOrder.amount,
         currency: razorpayOrder.currency,
         receipt: razorpayOrder.receipt
-      }
+      },
+      key_id: process.env.RAZORPAY_KEY_ID // Send key_id to frontend for initialization
     });
 
   } catch (error) {
-    console.error("❌ Error creating Razorpay order:", error);
+    console.error("❌ Unexpected error in createPaymentOrder:", error);
+    console.error("Error stack:", error.stack);
+    
     res.status(500).json({
       success: false,
       message: "Failed to create payment order",
