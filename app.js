@@ -8,13 +8,6 @@ const orderRoutes = require("./routes/order");
 const nodemailer = require('nodemailer');
 const razorpayWebhookRouter = require('./routes/razorpayWebhook');
 const facebookRateLimiter = require('./middlewares/facebookRateLimiter');
-
-
-console.log('Admin routes loaded:', typeof adminRoutes);
-
-// In-memory OTP store (for demo; switch to DB or cache in production)
-const otpStore = {};
-
 const fs = require("fs");
 const path = require('path');
 const { logger, logFilePath } = require("./utils/logger");
@@ -22,29 +15,52 @@ const { logger, logFilePath } = require("./utils/logger");
 // Facebook SDK
 const bizSdk = require('facebook-nodejs-business-sdk');
 
-// in case uploads folder is not created
-const uploadDir = path.join(__dirname, 'uploads', 'products');
-
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-// db connection
-dotenv.config();
-connectDB();
-
+// Initialize app FIRST - यह सबसे important है
 const app = express();
 
-// ✅ FIXED: Enable JSON parsing for ALL HTTP methods including DELETE
-app.use(express.json({ limit: '10mb', type: ['application/json', 'application/*+json', '*/*'] }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' })); // Add URL encoded support
-app.use(cors());
+// Dotenv configuration
+dotenv.config();
+
+// Connect to database
+connectDB();
+
+// CORS configuration - app define होने के बाद ही use करें
+app.use(cors({
+    origin: [
+        'http://localhost:3000',
+        'https://drbskhealthcare.com/',
+        'https://drbskhealthcare.in/'
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
+}));
+
+
+// Body parsers - इनका order महत्वपूर्ण है
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Trust proxy
 app.set("trust proxy", true);
-app.use('/uploads', express.static('uploads'));
+
+// Static files
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Create uploads directory if it doesn't exist
+const uploadDir = path.join(__dirname, 'uploads', 'products');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// In-memory OTP store
+const otpStore = {};
 
 // Facebook Pixel Configuration
 const FACEBOOK_ACCESS_TOKEN = process.env.FACEBOOK_ACCESS_TOKEN || 'EAALZCy4qRZChgBQnIEuqLYN7UDEoRRAeAJoN59rycRA4K0Ga6eSf8EY2vdF2P8e6qTUm3aCdhIZBshxuM2qbicl9yCXHcCoBbh9jLINNaF3JaRwYYLIWQkzoVU147djADEiB9wZAyZCBZCdoOQgfZBJKWFx7mfksodmIE1cxlmWDUlgf8QzZBpijjcuPlzB2pEne1wZDZD';
 const FACEBOOK_PIXEL_ID = process.env.FACEBOOK_PIXEL_ID || '1131280045595284';
+
+console.log('Admin routes loaded:', typeof adminRoutes);
 
 // ==================== FACEBOOK CONVERSIONS API ====================
 
@@ -171,7 +187,11 @@ app.post('/api/facebook-events', facebookRateLimiter, async (req, res) => {
 // Add this with your other routes
 const couponRoutes = require('./routes/couponRoutes');
 
-// Use routes
+// Use routes - यहाँ सभी routes को mount करें
+app.use('/admin', adminRoutes);
+app.use('/user', usersRoutes);
+app.use('/api', orderRoutes);
+app.use('/webhook', razorpayWebhookRouter);
 app.use('/api/coupons', couponRoutes);
 
 // Facebook Health Check
@@ -228,15 +248,7 @@ app.post('/api/test-facebook-event', async (req, res) => {
   }
 });
 
-// ==================== EXISTING ROUTES ====================
-
-// API routes
-app.use("/admin", adminRoutes);
-app.use("/user", usersRoutes);
-app.use('/api', orderRoutes);
-app.use('/webhook', razorpayWebhookRouter);
-
-// --- New OTP Email Verification Routes ---
+// ==================== OTP Email Verification Routes ====================
 
 // Setup Nodemailer transporter
 const transporter = nodemailer.createTransport({
@@ -416,7 +428,7 @@ app.get("/api/facebook-logs", (req, res) => {
 app.get('/', (req, res) => {
   const serverInfo = {
     name: 'Dr BSK Healthcare Backend',
-    status: '✅ Running with HTTPS!',
+    status: '✅ Running!',
     facebookApi: '✅ Facebook Conversions API Active',
     endpoints: {
       facebookEvents: '/api/facebook-events',
@@ -439,6 +451,39 @@ app.get('/api/facebook-config', (req, res) => {
     hasAccessToken: !!FACEBOOK_ACCESS_TOKEN,
     status: 'Configured',
     timestamp: new Date().toISOString()
+  });
+});
+
+// Error handling middleware - यह सबसे अंत में होना चाहिए
+app.use((err, req, res, next) => {
+  console.error('❌ Global Error:', err);
+  
+  // Handle multer errors
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ 
+      success: false,
+      message: 'File too large. Max size is 5MB.' 
+    });
+  }
+  
+  if (err.message === 'Not an image! Please upload an image.') {
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+
+  res.status(500).json({ 
+    success: false,
+    message: err.message || 'Internal server error'
+  });
+});
+
+// 404 handler - यह सबसे अंत में होना चाहिए
+app.use((req, res) => {
+  res.status(404).json({ 
+    success: false,
+    message: 'Route not found' 
   });
 });
 

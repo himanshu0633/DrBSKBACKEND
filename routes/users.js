@@ -40,12 +40,28 @@ router.put("/updateCategory/:id", upload.single("image"), categoryController.upd
 router.delete("/deleteCategory/:id", categoryController.deleteCategory);
 
 // router.post("/createSubCategory", SubCategoryController.createSubCategory);
-router.post("/createSubCategory", upload.single("image"), SubCategoryController.createSubCategory);
-router.get("/allSubcategories", SubCategoryController.getAllSubCategories);
-router.get("/Subcategory/:id", SubCategoryController.getSubCategoryById);
-// router.put("/updateSubCategory/:id", tokenRequired, SubCategoryController.updateSubCategory);
-router.put("/updateSubCategory/:id", upload.single("image"), SubCategoryController.updateSubCategory);
-router.delete("/deleteSubCategory/:id", SubCategoryController.deleteSubCategory);
+// GET all subcategories
+router.get('/allSubcategories', SubCategoryController.getAllSubCategories);
+
+// GET single subcategory
+router.get('/subcategory/:id', SubCategoryController.getSubCategoryById);
+
+// CREATE SubCategory with image upload
+router.post('/createSubCategory', (req, res, next) => {
+    console.log('\n📥 [BACKEND] POST /createSubCategory');
+    console.log('Headers:', req.headers['content-type']);
+    next();
+}, upload.single('image'), SubCategoryController.createSubCategory);
+
+// UPDATE subcategory with image upload
+router.put('/updateSubCategory/:id', (req, res, next) => {
+    console.log('\n📥 [BACKEND] PUT /updateSubCategory/' + req.params.id);
+    console.log('Headers:', req.headers['content-type']);
+    next();
+}, upload.single('image'), SubCategoryController.updateSubCategory);
+
+// DELETE subcategory (soft delete)
+router.delete('/deleteSubCategory/:id', SubCategoryController.deleteSubCategory);
 
 router.post("/createPrescription", upload.single("image"), prescriptionController.createPrescription);
 router.get("/allPrescriptions", prescriptionController.getPrescriptions);
