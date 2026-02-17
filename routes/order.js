@@ -296,6 +296,157 @@ const processMediaUrl = (url) => {
   return `${baseWithoutTrailingSlash}/${cleanUrl}`;
 };
 
+// ==================== MONTHLY ORDER TOTALS API - NEW ====================
+// Get monthly order totals for revenue chart
+router.get('/monthly-order-totals', async (req, res) => {
+  console.log("=== FETCHING MONTHLY ORDER TOTALS ===");
+  console.log("Timestamp:", new Date().toISOString());
+  
+  try {
+    // Aggregate orders by month
+    const monthlyTotals = await Order.aggregate([
+      {
+        $match: {
+          // Sirf confirmed/completed orders count karo
+          $or: [
+            { status: { $in: ['Confirmed', 'Processing', 'Shipped', 'Delivered'] } },
+            { 'paymentInfo.status': 'captured' },
+            { 
+              $and: [
+                { paymentMethod: 'cod' },
+                { status: { $ne: 'Cancelled' } } // COD orders jo cancel nahi hue
+              ]
+            }
+          ]
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: "$createdAt" },
+            month: { $month: "$createdAt" }
+          },
+          totalRevenue: { $sum: "$totalAmount" },
+          orderCount: { $sum: 1 },
+          codOrders: {
+            $sum: {
+              $cond: [{ $eq: ["$paymentMethod", "cod"] }, 1, 0]
+            }
+          },
+          onlineOrders: {
+            $sum: {
+              $cond: [{ $eq: ["$paymentMethod", "online"] }, 1, 0]
+            }
+          },
+          cancelledOrders: {
+            $sum: {
+              $cond: [{ $eq: ["$status", "Cancelled"] }, 1, 0]
+            }
+          }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          month: {
+            $concat: [
+              { $toString: "$_id.year" },
+              "-",
+              {
+                $cond: {
+                  if: { $lt: ["$_id.month", 10] },
+                  then: { $concat: ["0", { $toString: "$_id.month" }] },
+                  else: { $toString: "$_id.month" }
+                }
+              }
+            ]
+          },
+          total: { $round: ["$totalRevenue", 2] },
+          orderCount: 1,
+          codOrders: 1,
+          onlineOrders: 1,
+          cancelledOrders: 1,
+          averageOrderValue: {
+            $round: [{ $divide: ["$totalRevenue", "$orderCount"] }, 2]
+          }
+        }
+      },
+      {
+        $sort: { month: 1 } // Oldest to newest
+      }
+    ]);
+
+    console.log(`✅ Found ${monthlyTotals.length} months of data`);
+    
+    if (monthlyTotals.length > 0) {
+      console.log("Sample data:", monthlyTotals[0]);
+    }
+
+    // Agar koi data nahi hai to empty array bhejo
+    if (monthlyTotals.length === 0) {
+      return res.status(200).json([]);
+    }
+
+    res.status(200).json(monthlyTotals);
+
+  } catch (error) {
+    console.error("❌ Error fetching monthly order totals:", error);
+    console.error("Error stack:", error.stack);
+    
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch monthly order totals",
+      error: error.message
+    });
+  }
+});
+
+// OPTIONAL: Get yearly summary
+router.get('/yearly-summary', async (req, res) => {
+  console.log("=== FETCHING YEARLY SUMMARY ===");
+  
+  try {
+    const yearlySummary = await Order.aggregate([
+      {
+        $match: {
+          $or: [
+            { status: { $in: ['Confirmed', 'Processing', 'Shipped', 'Delivered'] } },
+            { 'paymentInfo.status': 'captured' }
+          ]
+        }
+      },
+      {
+        $group: {
+          _id: { year: { $year: "$createdAt" } },
+          totalRevenue: { $sum: "$totalAmount" },
+          totalOrders: { $sum: 1 },
+          averageOrderValue: { $avg: "$totalAmount" }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          year: "$_id.year",
+          totalRevenue: { $round: ["$totalRevenue", 2] },
+          totalOrders: 1,
+          averageOrderValue: { $round: ["$averageOrderValue", 2] }
+        }
+      },
+      { $sort: { year: -1 } }
+    ]);
+
+    console.log(`✅ Found ${yearlySummary.length} years of data`);
+    res.status(200).json(yearlySummary);
+  } catch (error) {
+    console.error("Error fetching yearly summary:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch yearly summary",
+      error: error.message 
+    });
+  }
+});
+
 // Get orders by email
 router.get('/orders/email/:email', async (req, res) => {
   const { email } = req.params;
@@ -469,7 +620,6 @@ router.post('/orders/link-guest-orders', async (req, res) => {
   }
 });
 
-// Create Razorpay Order
 // Create Razorpay Order
 router.post('/createPaymentOrder', async (req, res) => {
   const { userId, items, address, phone, totalAmount, email } = req.body;
@@ -799,7 +949,6 @@ router.post('/verifyPayment', async (req, res) => {
       phone: formattedPhone,
       totalAmount: parseFloat(totalAmount),
       razorpayOrderId: razorpay_order_id,
-      razorpayPaymentId: razorpay_payment_id,
       isGuest: isGuest,
       paymentInfo: {
         paymentId: razorpay_payment_id,
@@ -1799,236 +1948,6 @@ router.get('/productsBySubcategory', async (req, res) => {
   }
 });
 
-// CREATE COD ORDER - UPDATED VERSION
-// router.post('/createCOD', async (req, res) => {
-//   console.log("=== CREATE COD ORDER REQUEST ===");
-//   console.log("Request body:", JSON.stringify(req.body, null, 2));
-
-//   try {
-//     const {
-//       userId,
-//       items,
-//       address,
-//       phone,
-//       email,
-//       totalAmount,
-//       baseAmount,
-//       codCharge,
-//       isGuest,
-//       productName,
-//       productImage,
-//       paymentMethod,
-//       paymentStatus
-//     } = req.body;
-
-//     // Validate required fields
-//     if (!userId || !items || !address || !phone || !email || !totalAmount) {
-//       return res.status(400).json({
-//         success: false,
-//         message: 'Required fields are missing'
-//       });
-//     }
-
-//     // Email validation
-//     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Valid email address is required"
-//       });
-//     }
-
-//     // Prepare phone number
-//     let formattedPhone = phone.toString().trim();
-//     formattedPhone = formattedPhone.replace(/^\+91/, '').replace(/^91/, '');
-    
-//     console.log("Phone validation:", {
-//       original: phone,
-//       cleaned: formattedPhone,
-//       length: formattedPhone.length,
-//       is10Digits: /^\d{10}$/.test(formattedPhone)
-//     });
-    
-//     if (!/^\d{10}$/.test(formattedPhone)) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Phone number must be exactly 10 digits"
-//       });
-//     }
-//     formattedPhone = `+91${formattedPhone}`;
-
-//     // Generate order ID
-//     const orderId = `COD${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
-
-//     // Prepare user name
-//     const userName = email.split('@')[0] || 'Customer';
-
-//     // Prepare items with media
-//     console.log("Preparing COD order items...");
-//     const itemsWithMedia = await Promise.all(items.map(async (item) => {
-//       let media = [];
-//       let productDetails = {};
-      
-//       try {
-//         const product = await Product.findById(item.productId);
-//         if (product) {
-//           media = product.media || [];
-//           media = media.map(mediaItem => ({
-//             ...mediaItem,
-//             url: processMediaUrl(mediaItem.url)
-//           }));
-//           productDetails = {
-//             category: product.category,
-//             description: product.description
-//           };
-//         }
-//       } catch (error) {
-//         console.error(`Error fetching product ${item.productId}:`, error.message);
-//       }
-      
-//       return {
-//         productId: item.productId.toString(),
-//         name: item.name.toString().trim(),
-//         quantity: parseInt(item.quantity),
-//         price: parseFloat(item.price),
-//         media: media,
-//         ...productDetails
-//       };
-//     }));
-
-//     // Create COD order in database
-//     console.log("Creating COD order in database...");
-    
-//     const orderData = {
-//       orderId: orderId,
-//       userId: userId,
-//       userEmail: email,
-//       userName: userName,
-//       email: email,
-//       items: itemsWithMedia,
-//       address: address.toString().trim(),
-//       phone: formattedPhone,
-//       totalAmount: parseFloat(totalAmount),
-//       baseAmount: baseAmount ? parseFloat(baseAmount) : parseFloat(totalAmount) - (codCharge || 0),
-//       codCharge: codCharge || 0,
-//       isGuest: isGuest || false,
-//       paymentMethod: 'cod',
-//       paymentStatus: 'pending',
-//       status: 'Pending', // Use 'Pending' instead of 'confirmed'
-//       paymentInfo: {
-//         method: 'cod',
-//         status: 'pending',
-//         amount: parseFloat(totalAmount)
-//       },
-//       emailSent: false,
-//       createdAt: new Date()
-//     };
-
-//     console.log("COD Order data:", JSON.stringify(orderData, null, 2));
-
-//     let savedOrder;
-//     try {
-//       const newOrder = new Order(orderData);
-//       savedOrder = await newOrder.save();
-//       console.log("✅ COD Order created in database:", savedOrder._id);
-      
-//       // Send confirmation email for COD order
-//       try {
-//         console.log("Sending COD order confirmation email...");
-//         const emailResult = await sendOrderConfirmationEmail(
-//           savedOrder.toObject(), 
-//           email, 
-//           userName
-//         );
-        
-//         if (emailResult.success) {
-//           console.log(`✅ COD order confirmation email sent to ${email}`);
-//           savedOrder.emailSent = true;
-//           savedOrder.emailSentAt = new Date();
-//           savedOrder.emailError = null;
-//           await savedOrder.save();
-//         } else {
-//           console.log(`⚠️ COD Email sending failed: ${emailResult.error}`);
-//           savedOrder.emailSent = false;
-//           savedOrder.emailError = emailResult.error;
-//           await savedOrder.save();
-//         }
-//       } catch (emailError) {
-//         console.error("Error in COD email sending:", emailError);
-//         savedOrder.emailSent = false;
-//         savedOrder.emailError = emailError.message;
-//         await savedOrder.save();
-//       }
-      
-//     } catch (dbError) {
-//       console.error("Database error in COD order:", dbError);
-//       console.error("Error details:", dbError.message);
-//       console.error("Error stack:", dbError.stack);
-      
-//       // More specific error handling
-//       if (dbError.name === 'ValidationError') {
-//         const validationErrors = {};
-//         Object.keys(dbError.errors).forEach((key) => {
-//           validationErrors[key] = dbError.errors[key].message;
-//         });
-        
-//         return res.status(400).json({
-//           success: false,
-//           message: "Validation error in COD order",
-//           error: dbError.message,
-//           validationErrors: validationErrors
-//         });
-//       }
-      
-//       return res.status(500).json({
-//         success: false,
-//         message: "Failed to save COD order to database",
-//         error: dbError.message
-//       });
-//     }
-
-//     console.log("=== COD ORDER CREATION SUCCESS ===");
-
-//     // Send success response
-//     return res.status(201).json({
-//       success: true,
-//       message: "COD order created successfully!",
-//       orderId: savedOrder._id.toString(),
-//       orderDetails: {
-//         _id: savedOrder._id,
-//         orderId: savedOrder.orderId,
-//         status: savedOrder.status,
-//         totalAmount: savedOrder.totalAmount,
-//         baseAmount: savedOrder.baseAmount,
-//         codCharge: savedOrder.codCharge,
-//         createdAt: savedOrder.createdAt,
-//         email: savedOrder.email,
-//         paymentMethod: savedOrder.paymentMethod,
-//         emailSent: savedOrder.emailSent || false
-//       }
-//     });
-
-//   } catch (error) {
-//     console.error("❌ Error in createCOD:", error);
-//     console.error("Error stack:", error.stack);
-    
-//     return res.status(500).json({
-//       success: false,
-//       message: "Failed to create COD order",
-//       error: error.message
-//     });
-//   }
-// });
-
-// Test route with Razorpay key info
-router.get('/test', (req, res) => {
-  res.json({
-    success: true,
-    message: "Order routes working!",
-    timestamp: new Date().toISOString(),
-    razorpayKey: process.env.RAZORPAY_KEY_ID ? `${process.env.RAZORPAY_KEY_ID.substring(0, 10)}...` : 'not set',
-    environment: process.env.NODE_ENV || 'development'
-  });
-});
 // CREATE COD ORDER - FIXED VERSION
 router.post('/createCOD', async (req, res) => {
   console.log("=== CREATE COD ORDER REQUEST ===");
@@ -2280,4 +2199,5 @@ router.post('/createCOD', async (req, res) => {
     });
   }
 });
+
 module.exports = router;
