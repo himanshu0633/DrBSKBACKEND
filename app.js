@@ -57,8 +57,8 @@ if (!fs.existsSync(uploadDir)) {
 const otpStore = {};
 
 // Facebook Pixel Configuration
-const FACEBOOK_ACCESS_TOKEN = process.env.FACEBOOK_ACCESS_TOKEN || 'EAALZCy4qRZChgBQnIEuqLYN7UDEoRRAeAJoN59rycRA4K0Ga6eSf8EY2vdF2P8e6qTUm3aCdhIZBshxuM2qbicl9yCXHcCoBbh9jLINNaF3JaRwYYLIWQkzoVU147djADEiB9wZAyZCBZCdoOQgfZBJKWFx7mfksodmIE1cxlmWDUlgf8QzZBpijjcuPlzB2pEne1wZDZD';
-const FACEBOOK_PIXEL_ID = process.env.FACEBOOK_PIXEL_ID || '1131280045595284';
+const FACEBOOK_ACCESS_TOKEN = process.env.FACEBOOK_ACCESS_TOKEN || 'EAALZCy4qRZChgBQ3UN03hOXW1ZCoBNRvt9S4wNqBZBblSr6rQO09m5n8widAZCk0U7iO5bqZBkxiSEa3GieZBADXTHhnhnVAPlby1ZAAtrJ8rvkXbOxeIYgN5J558NUnCtbfseZCjhFRvLASswNgMSC1qpMlvjRkkMLvuli4bn8mojp9xuCFGnOUmzWIDrRYFm5lb6wZDZD';
+const FACEBOOK_PIXEL_ID = process.env.FACEBOOK_PIXEL_ID || '4397582790565563';
 
 console.log('Admin routes loaded:', typeof adminRoutes);
 
@@ -70,18 +70,20 @@ app.post('/api/facebook-events', facebookRateLimiter, async (req, res) => {
     console.log('📨 Received Facebook Event:', req.body.eventName);
 
     const {
-      eventName,
-      data,
-      fbp,
-      fbc,
-      clientUserAgent,
-    } = req.body;
+  eventName,
+  data,
+  fbp,
+  fbc,
+  clientUserAgent,
+  eventId
+} = req.body;
 
     // Get client IP address
-    const clientIp = req.headers['x-forwarded-for'] || 
-                     req.headers['x-real-ip'] || 
-                     req.connection.remoteAddress || 
-                     req.ip;
+const clientIp = (
+  req.headers['x-forwarded-for']?.split(',').shift() ||
+  req.socket?.remoteAddress ||
+  req.ip
+);
 
     // Create UserData object
     const userData = new bizSdk.UserData()
@@ -107,7 +109,7 @@ app.post('/api/facebook-events', facebookRateLimiter, async (req, res) => {
       const crypto = require('crypto');
       const hashedPhone = crypto
         .createHash('sha256')
-        .update(data.phone.replace(/\D/g, ''))
+        .update(data.phone.replace(/\D/g, '').trim())
         .digest('hex');
       userData.setPhones([hashedPhone]);
     }
@@ -127,11 +129,12 @@ app.post('/api/facebook-events', facebookRateLimiter, async (req, res) => {
 
     // Create ServerEvent object
     const serverEvent = new bizSdk.ServerEvent()
-      .setEventName(eventName)
-      .setEventTime(data.eventTime || Math.floor(Date.now() / 1000))
-      .setUserData(userData)
-      .setCustomData(customData)
-      .setActionSource('website');
+  .setEventName(eventName)
+  .setEventTime(data.eventTime || Math.floor(Date.now() / 1000))
+  .setEventId(eventId || `srv_${Date.now()}`) // ✅ Deduplication support
+  .setUserData(userData)
+  .setCustomData(customData)
+  .setActionSource('website');
 
     // Set event source URL
     if (data.eventSourceUrl) {

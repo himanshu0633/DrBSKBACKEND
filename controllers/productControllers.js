@@ -155,19 +155,15 @@ exports.updateProduct = async (req, res) => {
 // Soft delete a product
 exports.deleteProduct = async (req, res) => {
   try {
-    const deletedProduct = await Product.findByIdAndUpdate(
-      req.params.id,
-      { deleted_at: new Date() },
-      { new: true }
-    );
+    const deletedProduct = await Product.findByIdAndDelete(req.params.id);
 
     if (!deletedProduct) {
       logger.warn(`Product not found for deletion: ${req.params.id}`);
       return res.status(404).json({ message: "Product not found" });
     }
 
-    logger.info(`Product soft-deleted: ${deletedProduct._id}`);
-    res.status(200).json({ message: "Product deleted successfully" });
+    logger.info(`Product permanently deleted: ${deletedProduct._id}`);
+    res.status(200).json({ message: "Product permanently deleted successfully" });
   } catch (error) {
     logger.error(`Error deleting product (${req.params.id}):`, error);
     res.status(500).json({ message: error.message });
